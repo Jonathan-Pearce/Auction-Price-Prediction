@@ -75,9 +75,6 @@ FIELD_RENAME_MAP: Final[dict[str, str]] = {
 # Prefix to add to all column names
 COLUMN_PREFIX: Final[str] = "auction_"
 
-# Fields that should be excluded from prefix (internal use only)
-EXCLUDE_FROM_PREFIX: Final[set[str]] = set()
-
 # =============================================================================
 # Data Storage Configuration
 # =============================================================================
@@ -163,7 +160,7 @@ NUMERIC_FIELDS: Final[list[str]] = [
 
 def get_prefixed_field_name(field_name: str) -> str:
     """
-    Add auction_ prefix to field name if not excluded.
+    Add auction_ prefix to field name.
 
     Args:
         field_name: Original field name
@@ -171,8 +168,6 @@ def get_prefixed_field_name(field_name: str) -> str:
     Returns:
         Prefixed field name
     """
-    if field_name in EXCLUDE_FROM_PREFIX:
-        return field_name
     return f"{COLUMN_PREFIX}{field_name}"
 
 

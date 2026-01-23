@@ -534,10 +534,16 @@ async def upload_to_huggingface(
     # Setup repo
     if repo_id is None:
         repo_id = settings.huggingface.dataset_id
-        if not repo_id or repo_id == "maxsold-auctions":
+        if not repo_id:
             logger.error("Hugging Face repository ID not configured")
             logger.error("Set HF_DATASET_REPO in environment or .env file")
             return
+
+    # Validate token
+    if not settings.huggingface.token:
+        logger.error("Hugging Face token not found")
+        logger.error("Set HF_TOKEN in environment or .env file")
+        return
 
     logger.info(f"Uploading {data_file} to {repo_id}")
 

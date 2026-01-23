@@ -15,9 +15,10 @@ The auction scraper is designed to:
 
 ### Components
 
-1. **scraper_config.py**: Configuration module containing all constants and settings
-2. **auction_scraper.py**: Main scraper implementation with data fetching and processing
-3. **test_scraper.py**: Validation tests for scraper functionality
+1. **scraper_config.yaml**: YAML configuration file with all constants and settings
+2. **scraper_config.py**: Configuration loader that reads from YAML file
+3. **auction_scraper.py**: Main scraper implementation with data fetching and processing
+4. **test_scraper.py**: Validation tests for scraper functionality
 
 ### Data Flow
 
@@ -27,22 +28,24 @@ Auction IDs → API Fetcher → Data Processor → DataFrame Transform → Outpu
 
 ## Configuration
 
-All configuration values are defined in `src/data/scraper_config.py`:
+All configuration values are defined in `src/data/scraper_config.yaml`:
 
 ### API Settings
-- `MAXSOLD_API_BASE_URL`: MaxSold API base URL
-- `DEFAULT_ITEMS_LIMIT`: Maximum items per request (default: 2500)
-- `DEFAULT_RATE_LIMIT`: Requests per second (default: 10)
-- `CONCURRENT_REQUESTS`: Max concurrent requests (default: 5)
+- `api.base_url`: MaxSold API base URL
+- `api.parameters.items_limit`: Maximum items per request (default: 2500)
+- `rate_limiting.requests_per_second`: Requests per second (default: 10)
+- `rate_limiting.concurrent_requests`: Max concurrent requests (default: 5)
 
 ### Field Mappings
 - `catalog_lots` → `item_count`
 - `current_bid` → `winning_price`
-- All fields get `auction_` prefix
+- All fields get `auction_` prefix (configured in `fields.column_prefix`)
 
 ### Data Files
 - Input: `data/raw/auction_location_data.parquet` (column: `amAuctionId`)
 - Output: `data/processed/auctions/auction_data.parquet`
+
+To modify configuration values, edit the `scraper_config.yaml` file. The Python module will automatically load the updated values.
 
 ## Usage
 
@@ -205,6 +208,47 @@ This scraper complements the existing scraper (`src/data/scraper.py`):
 Both can be used depending on the analysis needs:
 - Use auction scraper for high-level auction analysis
 - Use item scraper for detailed item and bid analysis
+
+## YAML Configuration Structure
+
+The scraper uses a YAML configuration file (`src/data/scraper_config.yaml`) with the following structure:
+
+```yaml
+api:
+  base_url: "https://maxsold.maxsold.com/msapi"
+  endpoints:
+    auction_items: "/auctions/items"
+  parameters:
+    items_limit: 2500
+    timeout: 30
+
+rate_limiting:
+  requests_per_second: 10
+  concurrent_requests: 5
+
+fields:
+  auction_fields:
+    - id
+    - title
+    - catalog_lots
+    # ... more fields
+  field_rename_map:
+    catalog_lots: item_count
+    current_bid: winning_price
+  column_prefix: "auction_"
+
+storage:
+  input:
+    file: "auction_location_data.parquet"
+    directory: "data/raw"
+  output:
+    processed_directory: "data/processed/auctions"
+```
+
+To customize the scraper behavior:
+1. Edit values in `scraper_config.yaml`
+2. The Python module automatically loads the updated configuration
+3. No code changes required for most configuration updates
 
 ## API Response Structure
 

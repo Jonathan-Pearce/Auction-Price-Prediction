@@ -1,0 +1,3 @@
+# This file keeps the data/external directory in git
+# Data from third party sources stored here
+# Actual data files are excluded via .gitignore

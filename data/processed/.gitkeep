@@ -1,0 +1,3 @@
+# This file keeps the data/processed directory in git
+# Final, canonical data sets for modeling stored here
+# Actual data files are excluded via .gitignore

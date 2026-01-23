@@ -1,0 +1,103 @@
+# =============================================================================
+# Deploy to Hugging Face Spaces
+# =============================================================================
+# Automatically syncs the repository to Hugging Face Spaces on push to main.
+# 
+# Required secrets:
+# - HF_TOKEN: Hugging Face API token with write access
+# =============================================================================
+
+name: Deploy to Hugging Face
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'api/**'
+      - 'src/**'
+      - 'requirements.txt'
+      - 'pyproject.toml'
+      - 'Dockerfile'
+  workflow_dispatch:  # Manual trigger
+
+env:
+  HF_SPACE: Jonathan-Pearce/auction-price-predictor  # Update with your space name
+
+jobs:
+  deploy:
+    name: Deploy to HF Spaces
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for proper git push
+
+      - name: Configure Git
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: Push to Hugging Face Spaces
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          # Add HF remote
+          git remote add hf https://user:$HF_TOKEN@huggingface.co/spaces/${{ env.HF_SPACE }} || true
+          
+          # Push to HF (force to ensure sync)
+          git push hf main --force
+          
+          echo "✅ Deployed to https://huggingface.co/spaces/${{ env.HF_SPACE }}"
+
+  # Optional: Sync datasets
+  sync-datasets:
+    name: Sync Datasets to HF
+    runs-on: ubuntu-latest
+    if: false  # Enable when ready to sync datasets
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install huggingface_hub datasets
+
+      - name: Upload datasets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python scripts/sync_to_hf.py --datasets
+
+  # Optional: Push models to HF Hub
+  sync-models:
+    name: Sync Models to HF Hub
+    runs-on: ubuntu-latest
+    if: false  # Enable when models are ready
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install huggingface_hub torch
+
+      - name: Upload models
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python scripts/sync_to_hf.py --models

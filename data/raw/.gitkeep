@@ -1,0 +1,3 @@
+# This file keeps the data/raw directory in git
+# Actual data files are excluded via .gitignore
+# Data is hosted on Hugging Face Datasets

@@ -1,0 +1,3 @@
+# This file keeps the data/interim directory in git
+# Intermediate transformed data stored here
+# Actual data files are excluded via .gitignore

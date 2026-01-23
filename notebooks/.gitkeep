@@ -1,0 +1,4 @@
+# This file keeps the notebooks directory in git
+# Place Jupyter notebooks here for exploration and analysis
+# Naming convention: {number}_{initials}_{description}.ipynb
+# Example: 01_jp_initial_data_exploration.ipynb

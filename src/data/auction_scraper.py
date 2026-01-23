@@ -15,7 +15,7 @@ This module implements the requirements from the issue:
 Usage:
     # From command line
     python -m src.data.auction_scraper --limit 100
-    
+
     # From Python
     from src.data.auction_scraper import scrape_auctions
     df = await scrape_auctions(auction_ids=[99941, 99942])
@@ -40,7 +40,6 @@ from tenacity import (
 
 from src.data import scraper_config as config
 
-
 # =============================================================================
 # Auction Data Fetcher
 # =============================================================================
@@ -49,7 +48,7 @@ from src.data import scraper_config as config
 class AuctionDataFetcher:
     """
     Fetches and processes auction data from MaxSold API.
-    
+
     Features:
     - Async HTTP client with rate limiting
     - Automatic retries with exponential backoff
@@ -64,7 +63,7 @@ class AuctionDataFetcher:
     ):
         """
         Initialize the auction data fetcher.
-        
+
         Args:
             rate_limit: Maximum requests per second
             max_concurrent: Maximum concurrent requests
@@ -99,7 +98,9 @@ class AuctionDataFetcher:
     def client(self) -> httpx.AsyncClient:
         """Get HTTP client."""
         if self._client is None:
-            raise RuntimeError("Client not initialized. Use 'async with AuctionDataFetcher():'")
+            raise RuntimeError(
+                "Client not initialized. Use 'async with AuctionDataFetcher():'"
+            )
         return self._client
 
     async def _rate_limit(self) -> None:
@@ -121,10 +122,10 @@ class AuctionDataFetcher:
     async def fetch_auction_items(self, auction_id: int) -> dict[str, Any]:
         """
         Fetch auction items from MaxSold API.
-        
+
         Args:
             auction_id: Auction ID to fetch
-            
+
         Returns:
             Dictionary containing auction data and items
         """
@@ -137,41 +138,45 @@ class AuctionDataFetcher:
         }
 
         logger.debug(f"Fetching auction {auction_id}")
-        
+
         try:
             response = await self.client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
-            
+
             return data
-            
+
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error for auction {auction_id}: {e.response.status_code}")
+            logger.error(
+                f"HTTP error for auction {auction_id}: {e.response.status_code}"
+            )
             raise
         except Exception as e:
             logger.error(f"Error fetching auction {auction_id}: {e}")
             raise
 
-    def process_auction_data(self, auction_id: int, data: dict[str, Any] | list[Any]) -> dict[str, Any]:
+    def process_auction_data(
+        self, auction_id: int, data: dict[str, Any] | list[Any]
+    ) -> dict[str, Any]:
         """
         Process raw API response into auction-level aggregated data.
-        
+
         Args:
             auction_id: Auction ID
             data: Raw API response (can be dict with 'auction' key or list of items)
-            
+
         Returns:
             Dictionary with auction-level data and aggregated metrics
         """
         # Handle different response structures
         auction_data = {}
         items = []
-        
+
         if isinstance(data, dict):
             # Response has auction metadata and items
             auction_data = data.get("auction", {})
             items = data.get("items", [])
-            
+
             # If auction_data is empty but we have items, extract from first item
             if not auction_data and items:
                 # Some APIs include auction info in each item
@@ -182,21 +187,25 @@ class AuctionDataFetcher:
             # Response is just a list of items
             items = data
         else:
-            logger.warning(f"Unexpected response type for auction {auction_id}: {type(data)}")
-            
+            logger.warning(
+                f"Unexpected response type for auction {auction_id}: {type(data)}"
+            )
+
         # Extract auction-level fields
         result = {"id": auction_id}
-        
+
         for field in config.AUCTION_FIELDS:
             if field == "id":
                 continue  # Already set
             result[field] = auction_data.get(field)
-        
+
         # Aggregate item-level metrics
         result["total_viewed"] = sum(item.get("viewed", 0) for item in items)
-        result["total_winning_price"] = sum(item.get("current_bid", 0) for item in items)
+        result["total_winning_price"] = sum(
+            item.get("current_bid", 0) for item in items
+        )
         result["total_bid_count"] = sum(item.get("bid_count", 0) for item in items)
-        
+
         # Count total images across all items
         total_images = 0
         for item in items:
@@ -205,28 +214,28 @@ class AuctionDataFetcher:
                 total_images += len(images)
             elif isinstance(images, int):
                 total_images += images
-                
+
         result["total_images"] = total_images
-        
+
         # If catalog_lots is not in auction data, use the count of items
         if result.get("catalog_lots") is None:
             result["catalog_lots"] = len(items)
-            
+
         logger.debug(
             f"Processed auction {auction_id}: "
             f"{result.get('catalog_lots', 0)} items, "
             f"{result['total_bid_count']} bids"
         )
-        
+
         return result
 
     async def fetch_and_process_auction(self, auction_id: int) -> dict[str, Any] | None:
         """
         Fetch and process a single auction.
-        
+
         Args:
             auction_id: Auction ID to fetch
-            
+
         Returns:
             Processed auction data or None if failed
         """
@@ -245,26 +254,26 @@ class AuctionDataFetcher:
     ) -> list[dict[str, Any]]:
         """
         Fetch multiple auctions with controlled concurrency.
-        
+
         Args:
             auction_ids: List of auction IDs to fetch
             progress_callback: Optional callback function for progress updates
-            
+
         Returns:
             List of processed auction data
         """
         semaphore = asyncio.Semaphore(self.max_concurrent)
-        
+
         async def fetch_with_semaphore(auction_id: int) -> dict[str, Any] | None:
             async with semaphore:
                 result = await self.fetch_and_process_auction(auction_id)
                 if progress_callback:
                     progress_callback(auction_id, result is not None)
                 return result
-        
+
         tasks = [fetch_with_semaphore(aid) for aid in auction_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Filter out None and exceptions
         valid_results = []
         for i, result in enumerate(results):
@@ -272,9 +281,11 @@ class AuctionDataFetcher:
                 logger.error(f"Exception for auction {auction_ids[i]}: {result}")
             elif result is not None:
                 valid_results.append(result)
-                
-        logger.info(f"Successfully fetched {len(valid_results)}/{len(auction_ids)} auctions")
-        
+
+        logger.info(
+            f"Successfully fetched {len(valid_results)}/{len(auction_ids)} auctions"
+        )
+
         return valid_results
 
 
@@ -286,35 +297,35 @@ class AuctionDataFetcher:
 def transform_auction_data(auctions: list[dict[str, Any]]) -> pd.DataFrame:
     """
     Transform auction data: rename fields and add prefix to column names.
-    
+
     Args:
         auctions: List of auction dictionaries
-        
+
     Returns:
         DataFrame with transformed column names
     """
     if not auctions:
         logger.warning("No auctions to transform")
         return pd.DataFrame()
-    
+
     df = pd.DataFrame(auctions)
-    
+
     # Rename fields according to mapping
     rename_map = {}
     for old_name in df.columns:
         new_name = config.get_renamed_field_name(old_name)
         if new_name != old_name:
             rename_map[old_name] = new_name
-            
+
     if rename_map:
         df = df.rename(columns=rename_map)
         logger.debug(f"Renamed columns: {rename_map}")
-    
+
     # Add auction_ prefix to all columns
     prefix_map = {col: config.get_prefixed_field_name(col) for col in df.columns}
     df = df.rename(columns=prefix_map)
     logger.debug(f"Added prefix to columns: {list(df.columns)}")
-    
+
     return df
 
 
@@ -329,7 +340,7 @@ class ProgressTracker:
     def __init__(self, progress_file: Path = config.PROGRESS_FILE):
         """
         Initialize progress tracker.
-        
+
         Args:
             progress_file: Path to progress file
         """
@@ -403,7 +414,7 @@ async def scrape_auctions(
 ) -> pd.DataFrame:
     """
     Scrape auction data from MaxSold API.
-    
+
     Args:
         auction_ids: List of auction IDs to scrape (if None, loads from config file)
         limit: Maximum number of auctions to scrape
@@ -411,7 +422,7 @@ async def scrape_auctions(
         max_workers: Maximum parallel workers
         rate_limit: Maximum requests per second
         output_file: Output file path (if None, uses default from config)
-        
+
     Returns:
         DataFrame with scraped auction data
     """
@@ -425,12 +436,12 @@ async def scrape_auctions(
         except Exception as e:
             logger.error(f"Failed to load auction IDs: {e}")
             raise
-    
+
     # Apply limit if specified
     if limit:
         auction_ids = auction_ids[:limit]
         logger.info(f"Limited to {limit} auctions")
-    
+
     # Filter out completed auctions if tracking progress
     if use_progress_tracking:
         tracker = ProgressTracker()
@@ -442,11 +453,11 @@ async def scrape_auctions(
         )
     else:
         tracker = None
-    
+
     if not auction_ids:
         logger.warning("No auctions to scrape")
         return pd.DataFrame()
-    
+
     # Setup progress callback
     def progress_callback(auction_id: int, success: bool) -> None:
         if tracker:
@@ -455,10 +466,10 @@ async def scrape_auctions(
             else:
                 tracker.mark_failed(auction_id)
             tracker.save()
-    
+
     # Fetch auctions
     logger.info(f"Starting to scrape {len(auction_ids)} auctions...")
-    
+
     async with AuctionDataFetcher(
         rate_limit=rate_limit,
         max_concurrent=max_workers,
@@ -467,20 +478,20 @@ async def scrape_auctions(
             auction_ids,
             progress_callback=progress_callback if use_progress_tracking else None,
         )
-    
+
     # Transform data
     logger.info(f"Transforming {len(auctions)} auction records...")
     df = transform_auction_data(auctions)
-    
+
     # Save to file
     if output_file is None:
         output_file = config.PROCESSED_OUTPUT_DIR / config.AUCTION_DATA_FILENAME
-    
+
     if not df.empty:
         output_file.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(output_file, index=False)
         logger.info(f"Saved {len(df)} records to {output_file}")
-    
+
     return df
 
 
@@ -496,7 +507,7 @@ async def upload_to_huggingface(
 ) -> None:
     """
     Upload scraped data to Hugging Face Datasets.
-    
+
     Args:
         data_file: Path to parquet file (uses default if None)
         repo_id: HuggingFace repository ID (uses default if None)
@@ -505,20 +516,21 @@ async def upload_to_huggingface(
     try:
         from datasets import Dataset
         from huggingface_hub import HfApi
+
         from src.config import settings
     except ImportError as e:
         logger.error(f"Required packages not installed: {e}")
         logger.error("Install with: pip install datasets huggingface-hub")
         return
-    
+
     # Setup paths
     if data_file is None:
         data_file = config.PROCESSED_OUTPUT_DIR / config.AUCTION_DATA_FILENAME
-    
+
     if not data_file.exists():
         logger.error(f"Data file not found: {data_file}")
         return
-    
+
     # Setup repo
     if repo_id is None:
         repo_id = settings.huggingface.dataset_id
@@ -526,17 +538,17 @@ async def upload_to_huggingface(
             logger.error("Hugging Face repository ID not configured")
             logger.error("Set HF_DATASET_REPO in environment or .env file")
             return
-    
+
     logger.info(f"Uploading {data_file} to {repo_id}")
-    
+
     try:
         # Load data
         df = pd.read_parquet(data_file)
         logger.info(f"Loaded {len(df)} records from {data_file}")
-        
+
         # Create dataset
         dataset = Dataset.from_pandas(df)
-        
+
         # Create metadata
         metadata = {
             "name": config.HF_DATASET_NAME,
@@ -547,13 +559,13 @@ async def upload_to_huggingface(
             "columns": list(df.columns),
             "created_at": datetime.utcnow().isoformat(),
         }
-        
+
         # Save metadata
         metadata_file = data_file.parent / config.METADATA_FILENAME
         with open(metadata_file, "w") as f:
             json.dump(metadata, f, indent=2)
         logger.info(f"Created metadata file: {metadata_file}")
-        
+
         # Upload dataset
         logger.info("Pushing dataset to Hugging Face Hub...")
         dataset.push_to_hub(
@@ -561,7 +573,7 @@ async def upload_to_huggingface(
             private=private,
             token=settings.huggingface.token,
         )
-        
+
         # Upload metadata file
         api = HfApi()
         api.upload_file(
@@ -571,10 +583,10 @@ async def upload_to_huggingface(
             repo_type="dataset",
             token=settings.huggingface.token,
         )
-        
+
         logger.info(f"Successfully uploaded to {repo_id}")
         logger.info(f"View at: https://huggingface.co/datasets/{repo_id}")
-        
+
     except Exception as e:
         logger.error(f"Failed to upload to Hugging Face: {e}")
         raise
@@ -587,9 +599,7 @@ async def upload_to_huggingface(
 
 def main() -> None:
     """Command-line interface for auction scraper."""
-    parser = argparse.ArgumentParser(
-        description="Scrape auction data from MaxSold API"
-    )
+    parser = argparse.ArgumentParser(description="Scrape auction data from MaxSold API")
     parser.add_argument(
         "--auction-ids",
         type=int,
@@ -638,15 +648,15 @@ def main() -> None:
         action="store_true",
         help="Make Hugging Face dataset private",
     )
-    
+
     args = parser.parse_args()
-    
+
     # Ensure directories exist
     config.ensure_directories()
-    
+
     # Run scraper
     logger.info("Starting auction data scraper...")
-    
+
     df = asyncio.run(
         scrape_auctions(
             auction_ids=args.auction_ids,
@@ -657,7 +667,7 @@ def main() -> None:
             output_file=Path(args.output) if args.output else None,
         )
     )
-    
+
     # Print summary
     logger.info("=" * 60)
     logger.info("SCRAPING COMPLETE")
@@ -665,9 +675,9 @@ def main() -> None:
     logger.info(f"Total records: {len(df)}")
     if not df.empty:
         logger.info(f"Columns: {', '.join(df.columns)}")
-        logger.info(f"\nFirst few records:")
+        logger.info("\nFirst few records:")
         print(df.head())
-    
+
     # Upload to Hugging Face if requested
     if args.upload_hf:
         logger.info("\nUploading to Hugging Face...")

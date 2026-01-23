@@ -11,7 +11,7 @@ including API endpoints, field mappings, and scraping parameters.
 from pathlib import Path
 from typing import Final
 
-from src.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
+from src.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
 
 # =============================================================================
 # API Configuration
@@ -23,7 +23,9 @@ MAXSOLD_ENRICHED_API_BASE_URL: Final[str] = "https://api.maxsold.com"
 
 # API endpoints
 AUCTION_ITEMS_ENDPOINT: Final[str] = f"{MAXSOLD_API_BASE_URL}/auctions/items"
-ENRICHED_ITEM_ENDPOINT: Final[str] = f"{MAXSOLD_ENRICHED_API_BASE_URL}/listings/am/{{item_id}}/enriched"
+ENRICHED_ITEM_ENDPOINT: Final[str] = (
+    f"{MAXSOLD_ENRICHED_API_BASE_URL}/listings/am/{{item_id}}/enriched"
+)
 
 # API parameters
 DEFAULT_ITEMS_LIMIT: Final[int] = 2500
@@ -162,10 +164,10 @@ NUMERIC_FIELDS: Final[list[str]] = [
 def get_prefixed_field_name(field_name: str) -> str:
     """
     Add auction_ prefix to field name if not excluded.
-    
+
     Args:
         field_name: Original field name
-        
+
     Returns:
         Prefixed field name
     """
@@ -177,10 +179,10 @@ def get_prefixed_field_name(field_name: str) -> str:
 def get_renamed_field_name(field_name: str) -> str:
     """
     Get renamed field name based on mapping.
-    
+
     Args:
         field_name: Original field name
-        
+
     Returns:
         Renamed field name (or original if no mapping exists)
     """
@@ -190,10 +192,10 @@ def get_renamed_field_name(field_name: str) -> str:
 def apply_field_transformations(field_name: str) -> str:
     """
     Apply all field transformations (rename + prefix).
-    
+
     Args:
         field_name: Original field name
-        
+
     Returns:
         Fully transformed field name
     """

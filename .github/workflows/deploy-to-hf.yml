@@ -10,15 +10,15 @@
 name: Deploy to Hugging Face
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'api/**'
-      - 'src/**'
-      - 'requirements.txt'
-      - 'pyproject.toml'
-      - 'Dockerfile'
+  #push:
+  #  branches:
+  #    - main
+  #  paths:
+  #    - 'api/**'
+  #    - 'src/**'
+  #    - 'requirements.txt'
+  #    - 'pyproject.toml'
+  #    - 'Dockerfile'
   workflow_dispatch:  # Manual trigger
 
 env:

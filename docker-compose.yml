@@ -1,123 +1,39 @@
 # =============================================================================
 # Auction Price Prediction - Docker Compose
 # =============================================================================
-# Local development environment
+# Simplified setup for web scraping and data collection
 # Usage: docker-compose up -d
 # =============================================================================
 
 services:
   # ---------------------------------------------------------------------------
-  # Main Development Container
+  # Scraper Service - Main container for data collection
   # ---------------------------------------------------------------------------
-  app:
+  dev:
     build:
       context: .
-      target: dev
-    container_name: auction-predictor-dev
+    container_name: auction-scraper-dev
     volumes:
-      # Mount source code for live reload
+      # Mount source code for live development
       - ./src:/app/src
-      - ./api:/app/api
-      - ./tests:/app/tests
+      # Mount scripts and notebooks
+      - ./scripts:/app/scripts
       - ./notebooks:/app/notebooks
-      # Mount data directories (persisted)
+      # Mount data directory for persistence
       - ./data:/app/data
-      - ./models:/app/models
-      # Mount config files
-      - ./.env:/app/.env:ro
-    ports:
-      - "8000:8000"   # FastAPI
-      - "7860:7860"   # Gradio
-      - "8888:8888"   # Jupyter
-    environment:
-      - ENVIRONMENT=development
-      - DEBUG=true
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
-  # ---------------------------------------------------------------------------
-  # Jupyter Notebook Server (optional)
-  # ---------------------------------------------------------------------------
-  jupyter:
-    build:
-      context: .
-      target: dev
-    container_name: auction-predictor-jupyter
-    volumes:
-      - ./src:/app/src
-      - ./notebooks:/app/notebooks
-      - ./data:/app/data
-      - ./models:/app/models
-    ports:
-      - "8889:8888"
-    environment:
-      - JUPYTER_TOKEN=auction-dev
-    command: jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='auction-dev'
-    profiles:
-      - jupyter  # Only starts with: docker-compose --profile jupyter up
-
-  # ---------------------------------------------------------------------------
-  # Scraper Service (for long-running data collection)
-  # ---------------------------------------------------------------------------
-  scraper:
-    build:
-      context: .
-      target: dev
-    container_name: auction-predictor-scraper
-    volumes:
-      - ./src:/app/src
-      - ./data:/app/data
+      # Mount environment variables
       - ./.env:/app/.env:ro
     environment:
+      - PYTHONUNBUFFERED=1
       - ENVIRONMENT=development
-    command: python -m src.data.scraper
-    profiles:
-      - scraper  # Only starts with: docker-compose --profile scraper up
-
-  # ---------------------------------------------------------------------------
-  # Training Service (GPU support if available)
-  # ---------------------------------------------------------------------------
-  trainer:
-    build:
-      context: .
-      target: dev
-    container_name: auction-predictor-trainer
-    volumes:
-      - ./src:/app/src
-      - ./data:/app/data
-      - ./models:/app/models
-      - ./.env:/app/.env:ro
-    environment:
-      - ENVIRONMENT=development
-    # Uncomment below for GPU support (requires nvidia-docker)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
-    command: python -m src.modeling.train --all
-    profiles:
-      - train  # Only starts with: docker-compose --profile train up
+    # Keep container running for interactive development
+    stdin_open: true
+    tty: true
+    command: /bin/bash
 
 # =============================================================================
-# Named Volumes (for data persistence across container rebuilds)
+# Volumes - Persist data across container rebuilds
 # =============================================================================
 volumes:
   auction-data:
     driver: local
-  auction-models:
-    driver: local
-
-# =============================================================================
-# Networks
-# =============================================================================
-networks:
-  default:
-    name: auction-predictor-network

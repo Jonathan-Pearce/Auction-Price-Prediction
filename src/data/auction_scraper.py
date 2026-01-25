@@ -175,7 +175,7 @@ class AuctionDataFetcher:
         if isinstance(data, dict):
             # Response has auction metadata and items
             auction_data = data.get("auction", {})
-            items = data.get("items", [])
+            items = auction_data.get("items", [])
 
             # If auction_data is empty but we have items, extract from first item
             if not auction_data and items:
@@ -200,22 +200,43 @@ class AuctionDataFetcher:
             result[field] = auction_data.get(field)
 
         # Aggregate item-level metrics
-        result["total_viewed"] = sum(item.get("viewed", 0) for item in items)
-        result["total_winning_price"] = sum(
-            item.get("current_bid", 0) for item in items
-        )
-        result["total_bid_count"] = sum(item.get("bid_count", 0) for item in items)
-
-        # Count total images across all items
-        total_images = 0
-        for item in items:
+        # Handle nested structure: items can be a dict with numeric keys or a list
+        items_to_process = []
+        
+        if isinstance(items, dict):
+            # Items are structured as {0: item_data, 1: item_data, ...}
+            items_to_process = list(items.values())
+        elif isinstance(items, list):
+            # Items are already a list
+            items_to_process = items
+        
+        # Initialize aggregations
+        result["total_viewed"] = 0
+        result["total_winning_price"] = 0
+        result["total_bid_count"] = 0
+        result["total_images"] = 0
+        
+        # Loop over each item and aggregate
+        for item in items_to_process:
+            # Skip if item is not a dict
+            if not isinstance(item, dict):
+                continue
+            
+            # Aggregate viewed count
+            result["total_viewed"] += item.get("viewed", 0)
+            
+            # Aggregate winning price (current_bid)
+            result["total_winning_price"] += item.get("current_bid", 0)
+            
+            # Aggregate bid count
+            result["total_bid_count"] += item.get("bid_count", 0)
+            
+            # Count images
             images = item.get("images", [])
             if isinstance(images, list):
-                total_images += len(images)
+                result["total_images"] += len(images)
             elif isinstance(images, int):
-                total_images += images
-
-        result["total_images"] = total_images
+                result["total_images"] += images
 
         # If catalog_lots is not in auction data, use the count of items
         if result.get("catalog_lots") is None:

@@ -156,15 +156,14 @@ class TestEnrichment:
         features_df = compute_enriched_features(sample_df)
 
         # Check derived features exist
-        assert "density_proxy" in features_df.columns
-        assert "occupancy_rate" in features_df.columns
         assert "persons_per_dwelling" in features_df.columns
+        assert "occupancy_rate" in features_df.columns
         assert "income_skew" in features_df.columns
         assert "returns_per_capita" in features_df.columns
         assert "economic_capacity" in features_df.columns
 
         # Verify calculations
-        assert features_df["density_proxy"].iloc[0] == pytest.approx(10000 / 3500, rel=0.01)
+        assert features_df["persons_per_dwelling"].iloc[0] == pytest.approx(10000 / 3500, rel=0.01)
         assert features_df["occupancy_rate"].iloc[0] == pytest.approx(3500 / 4000, rel=0.01)
         assert features_df["income_skew"].iloc[0] == pytest.approx((60000 - 50000) / 50000, rel=0.01)
 

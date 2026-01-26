@@ -237,18 +237,17 @@ def compute_enriched_features(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame with additional derived feature columns
 
     Derived Features:
-        - density_proxy: Population per occupied dwelling
+        - persons_per_dwelling: Population / occupied dwellings (urbanization proxy)
         - occupancy_rate: Occupied dwellings / total dwellings
-        - persons_per_dwelling: Population / occupied dwellings
         - income_skew: (Average - Median) / Median income
         - returns_per_capita: Tax returns / population
         - economic_capacity: Median income * population (in billions)
     """
     df = df.copy()
 
-    # Population density proxy
+    # Persons per dwelling (urbanization proxy)
     if "Population, 2021" in df.columns and "Private dwellings occupied by usual residents, 2021" in df.columns:
-        df["density_proxy"] = (
+        df["persons_per_dwelling"] = (
             df["Population, 2021"] / df["Private dwellings occupied by usual residents, 2021"]
         )
 
@@ -256,12 +255,6 @@ def compute_enriched_features(df: pd.DataFrame) -> pd.DataFrame:
     if "Private dwellings occupied by usual residents, 2021" in df.columns and "Total private dwellings, 2021" in df.columns:
         df["occupancy_rate"] = (
             df["Private dwellings occupied by usual residents, 2021"] / df["Total private dwellings, 2021"]
-        )
-
-    # Persons per dwelling
-    if "Population, 2021" in df.columns and "Private dwellings occupied by usual residents, 2021" in df.columns:
-        df["persons_per_dwelling"] = (
-            df["Population, 2021"] / df["Private dwellings occupied by usual residents, 2021"]
         )
 
     # Income skew

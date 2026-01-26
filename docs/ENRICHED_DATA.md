@@ -127,9 +127,9 @@ auction_enriched = auction_enriched.merge(
 
 From the Census data, you can derive:
 
-1. **Population Density Proxy**
+1. **Persons per Dwelling** (urbanization proxy)
    ```python
-   features['density_proxy'] = (
+   features['persons_per_dwelling'] = (
        df['Population, 2021'] / 
        df['Private dwellings occupied by usual residents, 2021']
    )
@@ -144,15 +144,6 @@ From the Census data, you can derive:
    )
    ```
    Interpretation: High occupancy suggests desirable neighborhoods
-
-3. **Persons per Dwelling**
-   ```python
-   features['persons_per_dwelling'] = (
-       df['Population, 2021'] /
-       df['Private dwellings occupied by usual residents, 2021']
-   )
-   ```
-   Interpretation: Family size indicator (useful for furniture auctions)
 
 ### Economic Features
 
@@ -203,7 +194,7 @@ From the Tax Statistics, you can derive:
 2. **Urbanization Index**
    ```python
    features['urbanization'] = (
-       df['density_proxy'] * np.log1p(df['Population, 2021'])
+       df['persons_per_dwelling'] * np.log1p(df['Population, 2021'])
    )
    ```
    Interpretation: Combined measure of urban character
@@ -225,7 +216,7 @@ Not all auction postal codes will have corresponding FSA data:
 auction_data['has_enriched_data'] = ~auction_data['fsa'].isna()
 
 # Fill numeric features with defaults
-numeric_features = ['median_income', 'population', 'density_proxy']
+numeric_features = ['median_income', 'population', 'persons_per_dwelling']
 auction_data[numeric_features] = auction_data[numeric_features].fillna(
     auction_data[numeric_features].median()
 )
@@ -261,9 +252,9 @@ features = [
     'item_category',
     'starting_bid',
     'num_images',
-    'median_income',  # From enriched data
-    'population',     # From enriched data
-    'density_proxy',  # Derived from enriched data
+    'median_income',        # From enriched data
+    'population',           # From enriched data
+    'persons_per_dwelling', # Derived from enriched data
 ]
 
 X = auctions_enriched[features]

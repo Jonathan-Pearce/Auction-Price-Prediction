@@ -105,17 +105,20 @@ async def test_scraper_integration():
                 print(f"   - {col}")
             print()
 
-            # Check all columns have item_ prefix
-            all_have_prefix = all(col.startswith("item_") for col in df.columns)
+            # Check all columns have item_ prefix except auction_id
+            non_prefixed_cols = [
+                col for col in df.columns if not col.startswith("item_")
+            ]
+            all_have_prefix = non_prefixed_cols == ["auction_id"]
             print(
-                f"All columns have 'item_' prefix: {'✓ Yes' if all_have_prefix else '✗ No'}"
+                f"All columns have 'item_' prefix (except auction_id): {'✓ Yes' if all_have_prefix else '✗ No'}"
             )
             print()
 
             # Check for expected fields
             expected_fields = [
                 "item_id",
-                "item_auction_id",
+                "auction_id",  # No prefix for auction_id
                 "item_title",
                 "item_description",
                 "item_viewed",

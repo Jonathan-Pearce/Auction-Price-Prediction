@@ -154,12 +154,15 @@ def test_transform_item_data(mock_item_data):
     """Test item data transformation with prefix."""
     df = transform_item_data(mock_item_data)
 
-    # Check that all columns have 'item_' prefix
-    assert all(col.startswith("item_") for col in df.columns)
+    # Check that all columns have 'item_' prefix except auction_id
+    non_prefixed_cols = [col for col in df.columns if not col.startswith("item_")]
+    assert non_prefixed_cols == [
+        "auction_id"
+    ], f"Expected only auction_id without prefix, got: {non_prefixed_cols}"
 
     # Check expected columns exist
     assert "item_id" in df.columns
-    assert "item_auction_id" in df.columns
+    assert "auction_id" in df.columns  # No prefix for auction_id
     assert "item_title" in df.columns
     assert "item_description" in df.columns
     assert "item_viewed" in df.columns

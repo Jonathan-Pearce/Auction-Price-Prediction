@@ -80,12 +80,12 @@ df = asyncio.run(
 
 ## Data Fields
 
-The scraper extracts the following fields for each item (all prefixed with `item_`):
+The scraper extracts the following fields for each item. All fields are prefixed with `item_` except for `auction_id`:
 
 | Original Field    | Output Field                | Description                         |
 |-------------------|----------------------------|-------------------------------------|
 | `id`              | `item_id`                  | Unique item identifier              |
-| `auction_id`      | `item_auction_id`          | Parent auction ID                   |
+| `auction_id`      | `auction_id`               | Parent auction ID (no prefix)       |
 | `title`           | `item_title`               | Item title/name                     |
 | `description`     | `item_description`         | Item description                    |
 | `viewed`          | `item_viewed`              | Number of times viewed              |
@@ -117,15 +117,15 @@ data/
 ### Output Format
 
 - **Format**: Parquet (efficient columnar storage)
-- **Columns**: All fields prefixed with `item_`
+- **Columns**: All fields prefixed with `item_` (except `auction_id`)
 - **Rows**: One row per item
 
 Example output:
 ```
-   item_id  item_auction_id      item_title  item_viewed  item_starting_bid  item_current_bid  item_bid_count  item_number_of_images
-0     1001            99941  Antique Chair          150               10.0              45.0               8                      3
-1     1002            99941  Vintage Table          200               25.0               0.0               0                      1
-2     1003            99941       Lamp Set           75                5.0              12.0               3                      2
+   item_id  auction_id      item_title  item_viewed  item_starting_bid  item_current_bid  item_bid_count  item_number_of_images
+0     1001       99941  Antique Chair          150               10.0              45.0               8                      3
+1     1002       99941  Vintage Table          200               25.0               0.0               0                      1
+2     1003       99941       Lamp Set           75                5.0              12.0               3                      2
 ```
 
 ## Configuration

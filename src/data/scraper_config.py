@@ -169,7 +169,10 @@ def get_item_progress_file() -> Path:
     """Get path to item scraper progress tracking file."""
     item_raw_dir = get_item_output_directory(processed=False)
     filename = get_config_value(
-        "storage", "progress", "item_progress_filename", default="item_scraper_progress.json"
+        "storage",
+        "progress",
+        "item_progress_filename",
+        default="item_scraper_progress.json",
     )
     return item_raw_dir / filename
 
@@ -191,12 +194,16 @@ def get_item_output_directory(processed: bool = True) -> Path:
 
 def get_hf_dataset_repo() -> str:
     """Get Hugging Face dataset repository for loading auction IDs."""
-    return get_config_value("storage", "input", "hf_dataset_repo", default="jpearce610/auction_data")
+    return get_config_value(
+        "storage", "input", "hf_dataset_repo", default="jpearce610/auction_data"
+    )
 
 
 def get_hf_auction_id_column() -> str:
     """Get the column name for auction IDs in the Hugging Face dataset."""
-    return get_config_value("storage", "input", "hf_auction_id_column", default="auction_id")
+    return get_config_value(
+        "storage", "input", "hf_auction_id_column", default="auction_id"
+    )
 
 
 # =============================================================================
@@ -250,12 +257,18 @@ def get_prefixed_item_field_name(field_name: str) -> str:
     """
     Add configured item prefix to field name.
 
+    Exception: auction_id does not get the prefix and remains as-is.
+
     Args:
         field_name: Original field name
 
     Returns:
-        Prefixed field name with item_ prefix
+        Prefixed field name with item_ prefix (except for auction_id)
     """
+    # Exception: auction_id should not have the item_ prefix
+    if field_name == "auction_id":
+        return field_name
+
     prefix = get_item_column_prefix()
     return f"{prefix}{field_name}"
 
@@ -472,7 +485,9 @@ HF_ITEM_DATASET_DESCRIPTION = get_config_value(
 HF_ITEM_DATASET_LICENSE = get_config_value(
     "huggingface", "item_dataset", "license", default="cc-by-4.0"
 )
-HF_ITEM_DATASET_TAGS = get_config_value("huggingface", "item_dataset", "tags", default=[])
+HF_ITEM_DATASET_TAGS = get_config_value(
+    "huggingface", "item_dataset", "tags", default=[]
+)
 HF_ITEM_UPLOAD_FILES = get_config_value("huggingface", "item_upload_files", default=[])
 
 # Validation Configuration

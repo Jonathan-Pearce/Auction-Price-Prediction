@@ -85,14 +85,14 @@ The scraper follows the same architecture as `auction_scraper.py`:
 
 **File**: `data/processed/items/item_data.parquet`
 **Format**: Parquet (efficient columnar storage)
-**Columns**: All fields prefixed with `item_`
+**Columns**: All fields prefixed with `item_` (except `auction_id`)
 
 Example:
 ```
-item_id | item_auction_id | item_title    | item_viewed | item_starting_bid | item_current_bid | item_bid_count | item_number_of_images
---------|-----------------|---------------|-------------|-------------------|------------------|----------------|----------------------
-1001    | 99941           | Antique Chair | 150         | 10.0              | 45.0             | 8              | 3
-1002    | 99941           | Vintage Table | 200         | 25.0              | 0.0              | 0              | 1
+item_id | auction_id | item_title    | item_viewed | item_starting_bid | item_current_bid | item_bid_count | item_number_of_images
+--------|------------|---------------|-------------|-------------------|------------------|----------------|----------------------
+1001    | 99941      | Antique Chair | 150         | 10.0              | 45.0             | 8              | 3
+1002    | 99941      | Vintage Table | 200         | 25.0              | 0.0              | 0              | 1
 ```
 
 ## Configuration

@@ -8,7 +8,7 @@ This module implements the requirements from the issue:
 1. Scrapes item data from MaxSold API
 2. Loads auction IDs from Hugging Face dataset (jpearce610/auction_data)
 3. Extracts specified item fields (id, auction_id, title, description, etc.)
-4. Adds 'item_' prefix to all column names
+4. Adds 'item_' prefix to all column names (except auction_id)
 5. Uses parallel processing for faster scraping
 6. Uploads to Hugging Face
 
@@ -283,11 +283,13 @@ def transform_item_data(items: list[dict[str, Any]]) -> pd.DataFrame:
     """
     Transform item data: rename fields and add 'item_' prefix to column names.
 
+    Exception: auction_id does not get the prefix and remains as-is.
+
     Args:
         items: List of item dictionaries
 
     Returns:
-        DataFrame with transformed column names
+        DataFrame with transformed column names (all have item_ prefix except auction_id)
     """
     if not items:
         logger.warning("No items to transform")

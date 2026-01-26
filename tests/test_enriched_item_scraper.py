@@ -7,7 +7,6 @@ Tests for the enriched item scraper module.
 
 from unittest.mock import MagicMock, patch
 
-import pandas as pd
 import pytest
 
 from src.data.enriched_item_scraper import (
@@ -145,7 +144,7 @@ def test_process_enriched_item_data_missing_fields():
             # Missing other fields
         },
     }
-    
+
     result = fetcher.process_enriched_item_data(minimal_data, 7433915)
 
     assert result["amLotId"] == 7433915
@@ -163,13 +162,14 @@ def test_process_enriched_item_data_empty_generated_description():
         "amAuctionId": 99941,
         # No generatedDescription
     }
-    
+
     result = fetcher.process_enriched_item_data(data, 7433915)
 
     assert result["amLotId"] == 7433915
     assert result["amAuctionId"] == 99941
     # All generatedDescription fields should be None
-    assert result["generatedDescription_title"] is None
+    assert result.get("generatedDescription_title") is None
+    assert result.get("generatedDescription_description") is None
 
 
 # =============================================================================
@@ -184,7 +184,7 @@ def test_transform_enriched_item_data(mock_multiple_enriched_items):
         fetcher.process_enriched_item_data(item, item["amLotId"])
         for item in mock_multiple_enriched_items
     ]
-    
+
     df = transform_enriched_item_data(processed_items)
 
     # Check renaming (amLotId -> item_id, amAuctionId -> auction_id)
@@ -282,7 +282,7 @@ def test_progress_tracker_filter_pending(tmp_path):
 def test_progress_tracker_save_and_load(tmp_path):
     """Test saving and loading progress."""
     progress_file = tmp_path / "progress.json"
-    
+
     # Create and save progress
     tracker1 = ProgressTracker(progress_file=progress_file)
     tracker1.mark_completed(7433915)
@@ -332,7 +332,7 @@ async def test_fetch_and_process_item_404():
         # Setup mock 404 response
         mock_response = MagicMock()
         mock_response.status_code = 404
-        
+
         def raise_404():
             from httpx import HTTPStatusError
             raise HTTPStatusError(
@@ -340,7 +340,7 @@ async def test_fetch_and_process_item_404():
                 request=MagicMock(),
                 response=mock_response
             )
-        
+
         mock_response.raise_for_status.side_effect = raise_404
         mock_get.return_value = mock_response
 

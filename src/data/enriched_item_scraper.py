@@ -207,7 +207,7 @@ class EnrichedItemDataFetcher:
             enriched_data = await self.fetch_enriched_item(item_id)
             if enriched_data is None:
                 return None
-            
+
             processed_data = self.process_enriched_item_data(enriched_data, item_id)
             return processed_data
         except Exception as e:
@@ -234,11 +234,11 @@ class EnrichedItemDataFetcher:
                 result = await self.fetch_and_process_item(item_id)
                 if progress_callback:
                     progress_callback(item_id, result is not None)
-                
+
                 if result is not None:
                     logger.info(f"Fetched enriched data for item {item_id}")
                     yield item_id, result
-                    
+
             except Exception as e:
                 logger.error(f"Exception for item {item_id}: {e}")
                 if progress_callback:
@@ -334,39 +334,38 @@ def transform_enriched_item_data(items: list[dict[str, Any]]) -> pd.DataFrame:
 def append_to_parquet_efficient(df_new: pd.DataFrame, output_file: Path) -> int:
     """
     Append DataFrame to parquet file efficiently using pyarrow.
-    
+
     This avoids loading the entire existing file into memory.
-    
+
     Args:
         df_new: New data to append
         output_file: Path to parquet file
-        
+
     Returns:
         Total number of rows after append
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
-    
+
     if output_file.exists():
         # Read existing parquet file metadata to get row count
         existing_table = pq.read_table(output_file)
-        existing_count = len(existing_table)
-        
+
         # Convert new df to arrow table
         new_table = pa.Table.from_pandas(df_new, preserve_index=False)
-        
+
         # Write both tables to parquet
         combined_table = pa.concat_tables([existing_table, new_table])
         pq.write_table(combined_table, output_file)
-        
+
         total_count = len(combined_table)
         logger.info(f"Appended {len(df_new)} rows (total: {total_count})")
-        
+
         # Clean up
         del existing_table
         del new_table
         del combined_table
-        
+
         return total_count
     else:
         # First write
@@ -591,17 +590,17 @@ async def scrape_enriched_items(
         f"Starting to scrape enriched data from {len(item_ids)} items "
         f"(max {max_workers} concurrent, write every {batch_size} items)..."
     )
-    
+
     total_items_scraped = 0
     items_processed = 0
     accumulated_items = []
-    
+
     # Process in chunks
     for chunk_start in range(0, len(item_ids), batch_size):
         chunk_ids = item_ids[chunk_start : chunk_start + batch_size]
         chunk_num = chunk_start // batch_size + 1
         total_chunks = (len(item_ids) + batch_size - 1) // batch_size
-        
+
         logger.info(
             f"Processing chunk {chunk_num}/{total_chunks} with {len(chunk_ids)} items "
             f"(progress: {items_processed}/{len(item_ids)})"
@@ -616,32 +615,32 @@ async def scrape_enriched_items(
                 chunk_ids,
                 progress_callback=progress_callback if use_progress_tracking else None,
             )
-        
+
         # Add to accumulated items
         accumulated_items.extend(chunk_items)
         items_processed += len(chunk_ids)
-        
+
         logger.info(
             f"Chunk {chunk_num} fetched {len(chunk_items)} items. "
             f"Accumulated: {len(accumulated_items)} items"
         )
-        
+
         # Write accumulated items to disk and clear memory
         if accumulated_items:
             df_batch = transform_enriched_item_data(accumulated_items)
-            
+
             if not df_batch.empty:
                 total_items_scraped = append_to_parquet_efficient(df_batch, output_file)
                 logger.info(
                     f"Saved chunk {chunk_num}. Total in file: {total_items_scraped:,} items"
                 )
-            
+
             # Clear memory
             del df_batch
             del accumulated_items
             del chunk_items
             accumulated_items = []  # Reset for next chunk
-        
+
         logger.info(
             f"Progress: {items_processed}/{len(item_ids)} items complete"
         )

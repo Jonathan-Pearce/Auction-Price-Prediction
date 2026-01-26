@@ -180,9 +180,7 @@ class BidDataFetcher:
             return bids
 
         except httpx.HTTPStatusError as e:
-            logger.error(
-                f"HTTP error for item {item_id}: {e.response.status_code}"
-            )
+            logger.error(f"HTTP error for item {item_id}: {e.response.status_code}")
             raise
         except Exception as e:
             logger.error(f"Error fetching item {item_id}: {e}")
@@ -197,7 +195,7 @@ class BidDataFetcher:
         Applies the following transformations:
         1. Extracts configured bid fields
         2. Adds auction_id and item_id
-        3. Assigns bid_id counting downward (first bid = bid_count, last bid = 1)
+        3. Assigns id counting downward (first bid = count, last bid = 1)
 
         Args:
             bids: Raw bid data from API
@@ -220,9 +218,10 @@ class BidDataFetcher:
             for field in config.BID_FIELDS:
                 result[field] = bid.get(field)
 
-            # Assign bid_id counting downward (first bid = bid_count, last bid = 1)
-            result["bid_id"] = bid_count - idx
-            result["bid_count"] = bid_count
+            # Assign id counting downward (first bid = count, last bid = 1)
+            # These will get bid_ prefix added during transformation
+            result["id"] = bid_count - idx
+            result["count"] = bid_count
 
             processed_bids.append(result)
 
@@ -287,9 +286,7 @@ class BidDataFetcher:
         all_bids = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logger.error(
-                    f"Exception for item {item_pairs[i][1]}: {result}"
-                )
+                logger.error(f"Exception for item {item_pairs[i][1]}: {result}")
             elif result is not None:
                 all_bids.extend(result)
 
@@ -336,9 +333,7 @@ def transform_bid_data(bids: list[dict[str, Any]]) -> pd.DataFrame:
         logger.debug(f"Renamed columns: {rename_map}")
 
     # Add bid_ prefix to all columns except auction_id and item_id
-    prefix_map = {
-        col: config.get_prefixed_bid_field_name(col) for col in df.columns
-    }
+    prefix_map = {col: config.get_prefixed_bid_field_name(col) for col in df.columns}
     df = df.rename(columns=prefix_map)
     logger.debug(f"Added 'bid_' prefix to columns: {list(df.columns)}")
 
@@ -364,7 +359,6 @@ def append_to_parquet_efficient(df_new: pd.DataFrame, output_file: Path) -> int:
     if output_file.exists():
         # Read existing parquet file metadata to get row count
         existing_table = pq.read_table(output_file)
-        existing_count = len(existing_table)
 
         # Convert new df to arrow table
         new_table = pa.Table.from_pandas(df_new, preserve_index=False)
@@ -419,9 +413,7 @@ class ProgressTracker:
                     self.completed_items = {
                         tuple(pair) for pair in data.get("completed", [])
                     }
-                    self.failed_items = {
-                        tuple(pair) for pair in data.get("failed", [])
-                    }
+                    self.failed_items = {tuple(pair) for pair in data.get("failed", [])}
                     logger.info(
                         f"Loaded progress: {len(self.completed_items)} completed, "
                         f"{len(self.failed_items)} failed"
@@ -515,14 +507,12 @@ def load_item_ids_from_hf(limit: int | None = None) -> list[tuple[int, int]]:
         auction_ids = dataset[auction_id_column]
 
         # Create list of (auction_id, item_id) pairs
-        item_pairs = list(zip(auction_ids, item_ids))
+        item_pairs = list(zip(auction_ids, item_ids, strict=True))
 
         # Convert to integers
         item_pairs = [(int(aid), int(iid)) for aid, iid in item_pairs]
 
-        logger.info(
-            f"Loaded {len(item_pairs)} item pairs from Hugging Face"
-        )
+        logger.info(f"Loaded {len(item_pairs)} item pairs from Hugging Face")
 
         # Apply limit if specified
         if limit:
@@ -607,9 +597,7 @@ async def scrape_bids(
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Setup progress callback
-    def progress_callback(
-        auction_id: int, item_id: int, success: bool
-    ) -> None:
+    def progress_callback(auction_id: int, item_id: int, success: bool) -> None:
         if tracker:
             if success:
                 tracker.mark_completed(auction_id, item_id)
@@ -645,9 +633,7 @@ async def scrape_bids(
         ) as fetcher:
             chunk_bids = await fetcher.fetch_multiple_items(
                 chunk_pairs,
-                progress_callback=progress_callback
-                if use_progress_tracking
-                else None,
+                progress_callback=progress_callback if use_progress_tracking else None,
             )
 
         # Add to accumulated bids
@@ -664,9 +650,7 @@ async def scrape_bids(
             df_batch = transform_bid_data(accumulated_bids)
 
             if not df_batch.empty:
-                total_bids_scraped = append_to_parquet_efficient(
-                    df_batch, output_file
-                )
+                total_bids_scraped = append_to_parquet_efficient(df_batch, output_file)
                 logger.info(
                     f"Saved chunk {chunk_num}. Total in file: {total_bids_scraped:,} bids"
                 )
@@ -677,9 +661,7 @@ async def scrape_bids(
             del chunk_bids
             accumulated_bids = []  # Reset for next chunk
 
-        logger.info(
-            f"Progress: {items_processed}/{len(item_pairs)} items complete"
-        )
+        logger.info(f"Progress: {items_processed}/{len(item_pairs)} items complete")
 
     # Load final result
     if output_file.exists():
@@ -801,9 +783,7 @@ async def upload_to_huggingface(
 
 def main() -> None:
     """Command-line interface for bid scraper."""
-    parser = argparse.ArgumentParser(
-        description="Scrape bid data from MaxSold API"
-    )
+    parser = argparse.ArgumentParser(description="Scrape bid data from MaxSold API")
     parser.add_argument(
         "--limit",
         type=int,

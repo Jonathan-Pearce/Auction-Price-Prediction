@@ -226,10 +226,11 @@ def get_enriched_auction_output_directory(processed: bool = True) -> Path:
     Get enriched auction output directory path.
 
     Args:
-        processed: If True, returns processed directory; otherwise raw directory
+        processed: If True, returns enriched auction processed directory;
+                   otherwise enriched auction raw directory
 
     Returns:
-        Path to output directory
+        Path to enriched auction output directory
     """
     key = (
         "enriched_auction_processed_directory"

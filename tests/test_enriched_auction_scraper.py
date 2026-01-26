@@ -1,11 +1,13 @@
 # =============================================================================
-# Tests for Enriched Auction Scraper
+# Enriched Auction Scraper Tests
 # =============================================================================
 """
-Tests for the enriched auction scraper module.
+Unit tests for the enriched auction scraper module.
+
+This module tests the enriched auction data fetching, processing, and
+transformation logic, as well as progress tracking functionality.
 """
 
-from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest

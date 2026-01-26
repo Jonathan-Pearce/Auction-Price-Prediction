@@ -566,11 +566,15 @@ async def upload_to_huggingface(
     try:
         from datasets import Dataset
         from huggingface_hub import HfApi
-
-        from src.config import settings
     except ImportError as e:
         logger.error(f"Required packages not installed: {e}")
         logger.error("Install with: pip install datasets huggingface-hub")
+        return
+
+    try:
+        from src.config import settings
+    except ImportError as e:
+        logger.error(f"Could not import settings: {e}")
         return
 
     # Setup paths

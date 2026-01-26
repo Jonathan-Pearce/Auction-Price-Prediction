@@ -1,0 +1,33 @@
+# GitHub Copilot Instructions Configuration
+# This file maps domain-specific instruction files to file patterns
+
+instructions:
+  # Data Engineering - for data collection, scraping, and storage code
+  - path: instructions/data-engineering.instructions.md
+    patterns:
+      - "src/data/**/*.py"
+
+  # ML Training - for model training, features, and datasets
+  - path: instructions/ml-training.instructions.md
+    patterns:
+      - "src/modeling/**/*.py"
+      - "src/features.py"
+      - "src/dataset.py"
+
+  # Deployment - for API, Gradio, and deployment code
+  - path: instructions/deployment.instructions.md
+    patterns:
+      - "api/**/*.py"
+      - "**/gradio*.py"
+      - "**/deploy*"
+      - "**/*hf*"
+
+  # Project Management - for documentation, config, and workflows
+  - path: instructions/project-management.instructions.md
+    patterns:
+      - "docs/**/*"
+      - "README.md"
+      - "*.md"
+      - "Makefile"
+      - "pyproject.toml"
+      - ".github/**/*.yml"

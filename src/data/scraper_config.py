@@ -109,6 +109,21 @@ def get_column_prefix() -> str:
     return get_config_value("fields", "column_prefix", default="auction_")
 
 
+def get_item_column_prefix() -> str:
+    """Get item column prefix configuration."""
+    return get_config_value("fields", "item_column_prefix", default="item_")
+
+
+def get_item_fields() -> list[str]:
+    """Get item-level fields configuration."""
+    return get_config_value("fields", "item_fields", default=[])
+
+
+def get_item_field_rename_map() -> dict[str, str]:
+    """Get item field name mapping configuration."""
+    return get_config_value("fields", "item_field_rename_map", default={})
+
+
 # =============================================================================
 # Path Management Functions
 # =============================================================================
@@ -150,6 +165,47 @@ def get_progress_file() -> Path:
     return raw_dir / filename
 
 
+def get_item_progress_file() -> Path:
+    """Get path to item scraper progress tracking file."""
+    item_raw_dir = get_item_output_directory(processed=False)
+    filename = get_config_value(
+        "storage",
+        "progress",
+        "item_progress_filename",
+        default="item_scraper_progress.json",
+    )
+    return item_raw_dir / filename
+
+
+def get_item_output_directory(processed: bool = True) -> Path:
+    """
+    Get item output directory path.
+
+    Args:
+        processed: If True, returns processed directory; otherwise raw directory
+
+    Returns:
+        Path to output directory
+    """
+    key = "item_processed_directory" if processed else "item_raw_directory"
+    directory = get_config_value("storage", "output", key)
+    return PROJECT_ROOT / directory
+
+
+def get_hf_dataset_repo() -> str:
+    """Get Hugging Face dataset repository for loading auction IDs."""
+    return get_config_value(
+        "storage", "input", "hf_dataset_repo", default="jpearce610/auction_data"
+    )
+
+
+def get_hf_auction_id_column() -> str:
+    """Get the column name for auction IDs in the Hugging Face dataset."""
+    return get_config_value(
+        "storage", "input", "hf_auction_id_column", default="auction_id"
+    )
+
+
 # =============================================================================
 # Field Transformation Functions
 # =============================================================================
@@ -169,6 +225,20 @@ def get_renamed_field_name(field_name: str) -> str:
     return rename_map.get(field_name, field_name)
 
 
+def get_renamed_item_field_name(field_name: str) -> str:
+    """
+    Get renamed item field name based on configuration mapping.
+
+    Args:
+        field_name: Original item field name
+
+    Returns:
+        Renamed field name (or original if no mapping exists)
+    """
+    rename_map = get_item_field_rename_map()
+    return rename_map.get(field_name, field_name)
+
+
 def get_prefixed_field_name(field_name: str) -> str:
     """
     Add configured prefix to field name.
@@ -180,6 +250,26 @@ def get_prefixed_field_name(field_name: str) -> str:
         Prefixed field name
     """
     prefix = get_column_prefix()
+    return f"{prefix}{field_name}"
+
+
+def get_prefixed_item_field_name(field_name: str) -> str:
+    """
+    Add configured item prefix to field name.
+
+    Exception: auction_id does not get the prefix and remains as-is.
+
+    Args:
+        field_name: Original field name
+
+    Returns:
+        Prefixed field name with item_ prefix (except for auction_id)
+    """
+    # Exception: auction_id should not have the item_ prefix
+    if field_name == "auction_id":
+        return field_name
+
+    prefix = get_item_column_prefix()
     return f"{prefix}{field_name}"
 
 
@@ -197,6 +287,22 @@ def apply_field_transformations(field_name: str) -> str:
     renamed = get_renamed_field_name(field_name)
     # Then add prefix
     return get_prefixed_field_name(renamed)
+
+
+def apply_item_field_transformations(field_name: str) -> str:
+    """
+    Apply all item field transformations (rename + item_ prefix).
+
+    Args:
+        field_name: Original item field name
+
+    Returns:
+        Fully transformed field name with item_ prefix
+    """
+    # First rename
+    renamed = get_renamed_item_field_name(field_name)
+    # Then add item_ prefix
+    return get_prefixed_item_field_name(renamed)
 
 
 def transform_field_dict(data: dict[str, Any]) -> dict[str, Any]:
@@ -315,21 +421,32 @@ CONCURRENT_REQUESTS = get_config_value(
 # Field Configuration
 AUCTION_FIELDS = get_config_value("fields", "auction_fields", default=[])
 ITEM_AGGREGATE_FIELDS = get_config_value("fields", "item_aggregate_fields", default=[])
+ITEM_FIELDS = get_config_value("fields", "item_fields", default=[])
 FIELD_RENAME_MAP = get_field_rename_map()
+ITEM_FIELD_RENAME_MAP = get_item_field_rename_map()
 COLUMN_PREFIX = get_column_prefix()
+ITEM_COLUMN_PREFIX = get_item_column_prefix()
 
 # Storage Configuration
 AUCTION_IDS_FILE = get_auction_ids_file()
 AUCTION_IDS_COLUMN = get_auction_ids_column()
+HF_DATASET_REPO = get_hf_dataset_repo()
+HF_AUCTION_ID_COLUMN = get_hf_auction_id_column()
 RAW_OUTPUT_DIR = get_output_directory(processed=False)
 PROCESSED_OUTPUT_DIR = get_output_directory(processed=True)
+ITEM_RAW_OUTPUT_DIR = get_item_output_directory(processed=False)
+ITEM_PROCESSED_OUTPUT_DIR = get_item_output_directory(processed=True)
 AUCTION_DATA_FILENAME = get_config_value(
     "storage", "output", "auction_data_filename", default="auction_data.parquet"
+)
+ITEM_DATA_FILENAME = get_config_value(
+    "storage", "output", "item_data_filename", default="item_data.parquet"
 )
 METADATA_FILENAME = get_config_value(
     "storage", "output", "metadata_filename", default="metadata.json"
 )
 PROGRESS_FILE = get_progress_file()
+ITEM_PROGRESS_FILE = get_item_progress_file()
 
 # Parallel Processing Configuration
 DEFAULT_BATCH_SIZE = get_config_value(
@@ -357,6 +474,21 @@ HF_DATASET_LICENSE = get_config_value(
 )
 HF_DATASET_TAGS = get_config_value("huggingface", "dataset", "tags", default=[])
 HF_UPLOAD_FILES = get_config_value("huggingface", "upload_files", default=[])
+
+# Item Dataset Configuration
+HF_ITEM_DATASET_NAME = get_config_value(
+    "huggingface", "item_dataset", "name", default="maxsold-item-data"
+)
+HF_ITEM_DATASET_DESCRIPTION = get_config_value(
+    "huggingface", "item_dataset", "description", default=""
+)
+HF_ITEM_DATASET_LICENSE = get_config_value(
+    "huggingface", "item_dataset", "license", default="cc-by-4.0"
+)
+HF_ITEM_DATASET_TAGS = get_config_value(
+    "huggingface", "item_dataset", "tags", default=[]
+)
+HF_ITEM_UPLOAD_FILES = get_config_value("huggingface", "item_upload_files", default=[])
 
 # Validation Configuration
 REQUIRED_OUTPUT_FIELDS = get_config_value(

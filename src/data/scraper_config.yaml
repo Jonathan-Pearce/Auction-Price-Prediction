@@ -57,14 +57,37 @@ fields:
     - current_bid
     - bid_count
   
+  # Item-level fields to extract from API response
+  item_fields:
+    - id
+    - auction_id
+    - title
+    - description
+    - viewed
+    - starting_bid
+    - current_bid
+    - proxy_bid
+    - start_time
+    - end_time
+    - bid_count
+    - bidding_extended
+  
   # Field name mappings (old_name: new_name)
   field_rename_map:
     catalog_lots: item_count
     current_bid: winning_price
     id: id  # Keep id as-is initially, will add prefix later
   
+  # Item field name mappings (old_name: new_name)
+  item_field_rename_map:
+    id: id
+    auction_id: auction_id
+  
   # Prefix to add to all column names
   column_prefix: "auction_"
+  
+  # Prefix for item columns
+  item_column_prefix: "item_"
 
 # =============================================================================
 # Data Storage Configuration
@@ -75,17 +98,24 @@ storage:
     file: "auction_location_data.parquet"
     directory: "data/raw"
     id_column: "amAuctionId"
+    # Hugging Face dataset for auction IDs
+    hf_dataset_repo: "jpearce610/auction_data"
+    hf_auction_id_column: "auction_id"
   
   # Output data
   output:
     raw_directory: "data/raw/auctions"
     processed_directory: "data/processed/auctions"
     auction_data_filename: "auction_data.parquet"
+    item_raw_directory: "data/raw/items"
+    item_processed_directory: "data/processed/items"
+    item_data_filename: "item_data.parquet"
     metadata_filename: "metadata.json"
   
   # Progress tracking
   progress:
     filename: "scraper_progress.json"
+    item_progress_filename: "item_scraper_progress.json"
 
 # =============================================================================
 # Parallel Processing Configuration
@@ -118,9 +148,26 @@ huggingface:
       - e-commerce
       - maxsold
   
+  # Item dataset metadata
+  item_dataset:
+    name: "maxsold-item-data"
+    description: "MaxSold auction item data with detailed item information"
+    license: "cc-by-4.0"
+    tags:
+      - auction
+      - price-prediction
+      - e-commerce
+      - maxsold
+      - items
+  
   # Files to upload
   upload_files:
     - auction_data.parquet
+    - metadata.json
+  
+  # Item files to upload
+  item_upload_files:
+    - item_data.parquet
     - metadata.json
 
 # =============================================================================

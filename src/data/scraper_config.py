@@ -257,6 +257,10 @@ def get_bid_output_directory(processed: bool = True) -> Path:
         Path to output directory
     """
     key = "bid_processed_directory" if processed else "bid_raw_directory"
+    directory = get_config_value("storage", "output", key)
+    return PROJECT_ROOT / directory
+
+
 def get_enriched_auction_output_directory(processed: bool = True) -> Path:
     """
     Get enriched auction output directory path.
@@ -403,9 +407,6 @@ def get_renamed_bid_field_name(field_name: str) -> str:
 def get_prefixed_bid_field_name(field_name: str) -> str:
     """
     Add configured bid prefix to field name.
-def get_prefixed_enriched_auction_field_name(field_name: str) -> str:
-    """
-    Add configured enriched auction prefix to field name.
 
     Exception: auction_id and item_id do not get the prefix and remain as-is.
 
@@ -420,7 +421,14 @@ def get_prefixed_enriched_auction_field_name(field_name: str) -> str:
         return field_name
 
     prefix = get_bid_column_prefix()
-        Prefixed field name with enriched_auction_ prefix (except for auction_id and item_id)
+    return f"{prefix}{field_name}"
+
+
+def get_prefixed_enriched_auction_field_name(field_name: str) -> str:
+    """
+    Add configured enriched auction prefix to field name.
+
+    Prefixed field name with enriched_auction_ prefix (except for auction_id and item_id)
     """
     # Exception: auction_id and item_id should not have the enriched_auction_ prefix
     if field_name in ["auction_id", "item_id"]:
@@ -648,6 +656,7 @@ ITEM_DATA_FILENAME = get_config_value(
 )
 BID_DATA_FILENAME = get_config_value(
     "storage", "output", "bid_data_filename", default="bid_data.parquet"
+)
 ENRICHED_AUCTION_DATA_FILENAME = get_config_value(
     "storage",
     "output",

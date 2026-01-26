@@ -124,6 +124,21 @@ def get_item_field_rename_map() -> dict[str, str]:
     return get_config_value("fields", "item_field_rename_map", default={})
 
 
+def get_bid_column_prefix() -> str:
+    """Get bid column prefix configuration."""
+    return get_config_value("fields", "bid_column_prefix", default="bid_")
+
+
+def get_bid_fields() -> list[str]:
+    """Get bid-level fields configuration."""
+    return get_config_value("fields", "bid_fields", default=[])
+
+
+def get_bid_field_rename_map() -> dict[str, str]:
+    """Get bid field name mapping configuration."""
+    return get_config_value("fields", "bid_field_rename_map", default={})
+
+
 # =============================================================================
 # Path Management Functions
 # =============================================================================
@@ -192,6 +207,33 @@ def get_item_output_directory(processed: bool = True) -> Path:
     return PROJECT_ROOT / directory
 
 
+def get_bid_progress_file() -> Path:
+    """Get path to bid scraper progress tracking file."""
+    bid_raw_dir = get_bid_output_directory(processed=False)
+    filename = get_config_value(
+        "storage",
+        "progress",
+        "bid_progress_filename",
+        default="bid_scraper_progress.json",
+    )
+    return bid_raw_dir / filename
+
+
+def get_bid_output_directory(processed: bool = True) -> Path:
+    """
+    Get bid output directory path.
+
+    Args:
+        processed: If True, returns processed directory; otherwise raw directory
+
+    Returns:
+        Path to output directory
+    """
+    key = "bid_processed_directory" if processed else "bid_raw_directory"
+    directory = get_config_value("storage", "output", key)
+    return PROJECT_ROOT / directory
+
+
 def get_hf_dataset_repo() -> str:
     """Get Hugging Face dataset repository for loading auction IDs."""
     return get_config_value(
@@ -203,6 +245,20 @@ def get_hf_auction_id_column() -> str:
     """Get the column name for auction IDs in the Hugging Face dataset."""
     return get_config_value(
         "storage", "input", "hf_auction_id_column", default="auction_id"
+    )
+
+
+def get_hf_item_dataset_repo() -> str:
+    """Get Hugging Face dataset repository for loading item IDs."""
+    return get_config_value(
+        "storage", "hf_datasets", "item_data_repo", default="jpearce610/item_data"
+    )
+
+
+def get_hf_item_id_column() -> str:
+    """Get the column name for item IDs in the Hugging Face item dataset."""
+    return get_config_value(
+        "storage", "hf_datasets", "item_id_column", default="item_id"
     )
 
 
@@ -273,6 +329,40 @@ def get_prefixed_item_field_name(field_name: str) -> str:
     return f"{prefix}{field_name}"
 
 
+def get_renamed_bid_field_name(field_name: str) -> str:
+    """
+    Get renamed bid field name based on configuration mapping.
+
+    Args:
+        field_name: Original bid field name
+
+    Returns:
+        Renamed field name (or original if no mapping exists)
+    """
+    rename_map = get_bid_field_rename_map()
+    return rename_map.get(field_name, field_name)
+
+
+def get_prefixed_bid_field_name(field_name: str) -> str:
+    """
+    Add configured bid prefix to field name.
+
+    Exception: auction_id and item_id do not get the prefix and remain as-is.
+
+    Args:
+        field_name: Original field name
+
+    Returns:
+        Prefixed field name with bid_ prefix (except for auction_id and item_id)
+    """
+    # Exception: auction_id and item_id should not have the bid_ prefix
+    if field_name in ("auction_id", "item_id"):
+        return field_name
+
+    prefix = get_bid_column_prefix()
+    return f"{prefix}{field_name}"
+
+
 def apply_field_transformations(field_name: str) -> str:
     """
     Apply all field transformations (rename + prefix).
@@ -303,6 +393,22 @@ def apply_item_field_transformations(field_name: str) -> str:
     renamed = get_renamed_item_field_name(field_name)
     # Then add item_ prefix
     return get_prefixed_item_field_name(renamed)
+
+
+def apply_bid_field_transformations(field_name: str) -> str:
+    """
+    Apply all bid field transformations (rename + bid_ prefix).
+
+    Args:
+        field_name: Original bid field name
+
+    Returns:
+        Fully transformed field name with bid_ prefix
+    """
+    # First rename
+    renamed = get_renamed_bid_field_name(field_name)
+    # Then add bid_ prefix
+    return get_prefixed_bid_field_name(renamed)
 
 
 def transform_field_dict(data: dict[str, Any]) -> dict[str, Any]:
@@ -424,29 +530,40 @@ ITEM_AGGREGATE_FIELDS = get_config_value("fields", "item_aggregate_fields", defa
 ITEM_FIELDS = get_config_value("fields", "item_fields", default=[])
 FIELD_RENAME_MAP = get_field_rename_map()
 ITEM_FIELD_RENAME_MAP = get_item_field_rename_map()
+BID_FIELD_RENAME_MAP = get_bid_field_rename_map()
 COLUMN_PREFIX = get_column_prefix()
 ITEM_COLUMN_PREFIX = get_item_column_prefix()
+BID_COLUMN_PREFIX = get_bid_column_prefix()
+BID_FIELDS = get_config_value("fields", "bid_fields", default=[])
 
 # Storage Configuration
 AUCTION_IDS_FILE = get_auction_ids_file()
 AUCTION_IDS_COLUMN = get_auction_ids_column()
 HF_DATASET_REPO = get_hf_dataset_repo()
 HF_AUCTION_ID_COLUMN = get_hf_auction_id_column()
+HF_ITEM_DATASET_REPO = get_hf_item_dataset_repo()
+HF_ITEM_ID_COLUMN = get_hf_item_id_column()
 RAW_OUTPUT_DIR = get_output_directory(processed=False)
 PROCESSED_OUTPUT_DIR = get_output_directory(processed=True)
 ITEM_RAW_OUTPUT_DIR = get_item_output_directory(processed=False)
 ITEM_PROCESSED_OUTPUT_DIR = get_item_output_directory(processed=True)
+BID_RAW_OUTPUT_DIR = get_bid_output_directory(processed=False)
+BID_PROCESSED_OUTPUT_DIR = get_bid_output_directory(processed=True)
 AUCTION_DATA_FILENAME = get_config_value(
     "storage", "output", "auction_data_filename", default="auction_data.parquet"
 )
 ITEM_DATA_FILENAME = get_config_value(
     "storage", "output", "item_data_filename", default="item_data.parquet"
 )
+BID_DATA_FILENAME = get_config_value(
+    "storage", "output", "bid_data_filename", default="bid_data.parquet"
+)
 METADATA_FILENAME = get_config_value(
     "storage", "output", "metadata_filename", default="metadata.json"
 )
 PROGRESS_FILE = get_progress_file()
 ITEM_PROGRESS_FILE = get_item_progress_file()
+BID_PROGRESS_FILE = get_bid_progress_file()
 
 # Parallel Processing Configuration
 DEFAULT_BATCH_SIZE = get_config_value(
@@ -489,6 +606,21 @@ HF_ITEM_DATASET_TAGS = get_config_value(
     "huggingface", "item_dataset", "tags", default=[]
 )
 HF_ITEM_UPLOAD_FILES = get_config_value("huggingface", "item_upload_files", default=[])
+
+# Bid Dataset Configuration
+HF_BID_DATASET_NAME = get_config_value(
+    "huggingface", "bid_dataset", "name", default="maxsold-bid-data"
+)
+HF_BID_DATASET_DESCRIPTION = get_config_value(
+    "huggingface", "bid_dataset", "description", default=""
+)
+HF_BID_DATASET_LICENSE = get_config_value(
+    "huggingface", "bid_dataset", "license", default="cc-by-4.0"
+)
+HF_BID_DATASET_TAGS = get_config_value(
+    "huggingface", "bid_dataset", "tags", default=[]
+)
+HF_BID_UPLOAD_FILES = get_config_value("huggingface", "bid_upload_files", default=[])
 
 # Validation Configuration
 REQUIRED_OUTPUT_FIELDS = get_config_value(

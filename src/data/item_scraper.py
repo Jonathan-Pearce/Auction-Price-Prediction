@@ -146,12 +146,12 @@ class ItemDataFetcher:
 
             # Extract items from response
             items = []
-            
+
             if isinstance(data, dict):
                 # Response has auction metadata and items
                 auction_data = data.get("auction", {})
                 items_data = auction_data.get("items", [])
-                
+
                 # Handle different item structures
                 if isinstance(items_data, dict):
                     # Items are structured as {0: item_data, 1: item_data, ...}
@@ -159,7 +159,7 @@ class ItemDataFetcher:
                 elif isinstance(items_data, list):
                     # Items are already a list
                     items = items_data
-                    
+
             elif isinstance(data, list):
                 # Response is just a list of items
                 items = data
@@ -403,10 +403,10 @@ def load_auction_ids_from_hf(limit: int | None = None) -> list[int]:
         from datasets import load_dataset
 
         logger.info(f"Loading auction IDs from Hugging Face: {config.HF_DATASET_REPO}")
-        
+
         # Load dataset from Hugging Face
         dataset = load_dataset(config.HF_DATASET_REPO, split="train")
-        
+
         # Extract auction IDs
         id_column = config.HF_AUCTION_ID_COLUMN
         if id_column not in dataset.column_names:
@@ -422,27 +422,29 @@ def load_auction_ids_from_hf(limit: int | None = None) -> list[int]:
                     id_column = col
                     break
             else:
-                raise ValueError(f"Could not find auction ID column in dataset")
-        
+                raise ValueError("Could not find auction ID column in dataset")
+
         auction_ids = dataset[id_column]
-        
+
         # Convert to list and ensure integers
         auction_ids = [int(aid) for aid in auction_ids]
-        
+
         # Remove duplicates and sort
-        auction_ids = sorted(list(set(auction_ids)))
-        
+        auction_ids = sorted(set(auction_ids))
+
         logger.info(f"Loaded {len(auction_ids)} unique auction IDs from Hugging Face")
-        
+
         # Apply limit if specified
         if limit:
             auction_ids = auction_ids[:limit]
             logger.info(f"Limited to {limit} auction IDs")
-        
+
         return auction_ids
-        
+
     except ImportError:
-        logger.error("datasets library not installed. Install with: pip install datasets")
+        logger.error(
+            "datasets library not installed. Install with: pip install datasets"
+        )
         raise
     except Exception as e:
         logger.error(f"Failed to load auction IDs from Hugging Face: {e}")
@@ -650,9 +652,7 @@ async def upload_to_huggingface(
 
 def main() -> None:
     """Command-line interface for item scraper."""
-    parser = argparse.ArgumentParser(
-        description="Scrape item data from MaxSold API"
-    )
+    parser = argparse.ArgumentParser(description="Scrape item data from MaxSold API")
     parser.add_argument(
         "--auction-ids",
         type=int,

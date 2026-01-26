@@ -8,12 +8,9 @@ This simulates the scraping process without needing network access.
 """
 
 import asyncio
-from pathlib import Path
-import pandas as pd
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from src.data.item_scraper import ItemDataFetcher, transform_item_data
-
 
 # Mock API response data
 MOCK_API_RESPONSE = {
@@ -71,50 +68,50 @@ MOCK_API_RESPONSE = {
 
 async def test_scraper_integration():
     """Test the complete scraper workflow with mock data."""
-    
+
     print("=" * 60)
     print("ITEM SCRAPER INTEGRATION TEST")
     print("=" * 60)
     print()
-    
+
     # Test with mock API
     async with ItemDataFetcher() as fetcher:
         # Mock the HTTP client
-        with patch.object(fetcher.client, 'get') as mock_get:
+        with patch.object(fetcher.client, "get") as mock_get:
             mock_response = MagicMock()
             mock_response.json.return_value = MOCK_API_RESPONSE
             mock_response.raise_for_status = MagicMock()
             mock_get.return_value = mock_response
-            
+
             print("1. Fetching items for auction 99941...")
             items = await fetcher.fetch_auction_items(99941)
             print(f"   ✓ Retrieved {len(items)} items")
             print()
-            
+
             print("2. Processing item data...")
-            processed_items = [
-                fetcher.process_item_data(item, 99941) for item in items
-            ]
+            processed_items = [fetcher.process_item_data(item, 99941) for item in items]
             print(f"   ✓ Processed {len(processed_items)} items")
             print()
-            
+
             print("3. Transforming data with 'item_' prefix...")
             df = transform_item_data(processed_items)
             print(f"   ✓ Created DataFrame with {len(df)} rows")
             print()
-            
+
             print("4. Verifying output format...")
             print()
             print("Columns:")
             for col in df.columns:
                 print(f"   - {col}")
             print()
-            
+
             # Check all columns have item_ prefix
             all_have_prefix = all(col.startswith("item_") for col in df.columns)
-            print(f"All columns have 'item_' prefix: {'✓ Yes' if all_have_prefix else '✗ No'}")
+            print(
+                f"All columns have 'item_' prefix: {'✓ Yes' if all_have_prefix else '✗ No'}"
+            )
             print()
-            
+
             # Check for expected fields
             expected_fields = [
                 "item_id",
@@ -131,45 +128,45 @@ async def test_scraper_integration():
                 "item_bidding_extended",
                 "item_number_of_images",
             ]
-            
+
             print("Expected fields present:")
             for field in expected_fields:
                 present = field in df.columns
                 print(f"   {'✓' if present else '✗'} {field}")
             print()
-            
+
             print("5. Sample data:")
             print()
             print(df.head())
             print()
-            
+
             print("6. Data types:")
             print()
             print(df.dtypes)
             print()
-            
+
             print("7. Summary statistics:")
             print()
             print(df.describe())
             print()
-            
+
             # Test zero-bid item handling
             zero_bid_items = df[df["item_bid_count"] == 0]
             print(f"8. Zero-bid items: {len(zero_bid_items)} items with no bids")
             if not zero_bid_items.empty:
                 print(f"   Example: {zero_bid_items['item_title'].iloc[0]}")
             print()
-            
+
             # Test image counting
             print("9. Image counts:")
             for _, row in df.iterrows():
                 print(f"   {row['item_title']}: {row['item_number_of_images']} images")
             print()
-            
+
             print("=" * 60)
             print("✓ ALL TESTS PASSED")
             print("=" * 60)
-            
+
             return df
 
 

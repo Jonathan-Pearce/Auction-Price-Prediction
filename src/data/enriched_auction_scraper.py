@@ -187,7 +187,7 @@ class EnrichedAuctionDataFetcher:
                     result["approxLocation_countryCode"] = location.get("countryCode")
                     result["approxLocation_regionCode"] = location.get("regionCode")
                     result["approxLocation_postalCode"] = location.get("postalCode")
-                    
+
                     # Extract lat/lng from latLng
                     lat_lng = location.get("latLng", {})
                     if isinstance(lat_lng, dict):

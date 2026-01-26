@@ -94,10 +94,20 @@ scrape:  ## Run MaxSold data scraper
 	$(PYTHON) -m src.data.scraper
 	@echo "$(GREEN)Scraping complete!$(NC)"
 
+scrape-items:  ## Run MaxSold item data scraper
+	@echo "$(BLUE)Starting MaxSold item scraper...$(NC)"
+	$(PYTHON) -m src.data.item_scraper
+	@echo "$(GREEN)Item scraping complete!$(NC)"
+
 scrape-sample:  ## Scrape a small sample for testing (10 auctions)
 	@echo "$(BLUE)Scraping sample data...$(NC)"
 	$(PYTHON) -m src.data.scraper --sample --limit 10
 	@echo "$(GREEN)Sample scraping complete!$(NC)"
+
+scrape-items-sample:  ## Scrape item data sample for testing (10 auctions)
+	@echo "$(BLUE)Scraping sample item data...$(NC)"
+	$(PYTHON) -m src.data.item_scraper --limit 10
+	@echo "$(GREEN)Sample item scraping complete!$(NC)"
 
 # =============================================================================
 # Model Training

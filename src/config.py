@@ -44,7 +44,10 @@ REFERENCES_DIR = PROJECT_ROOT / "references"
 class MaxSoldSettings(BaseSettings):
     """MaxSold API configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="MAXSOLD_")
+    model_config = SettingsConfigDict(
+        env_prefix="MAXSOLD_",
+        extra="ignore",
+    )
 
     # API endpoints (not configurable - hardcoded for MaxSold)
     base_url: str = "https://maxsold.maxsold.com/msapi"
@@ -63,7 +66,10 @@ class MaxSoldSettings(BaseSettings):
 class DatabaseSettings(BaseSettings):
     """DuckDB database configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="DUCKDB_")
+    model_config = SettingsConfigDict(
+        env_prefix="DUCKDB_",
+        extra="ignore",
+    )
 
     path: Path = Field(default=DATA_DIR / "auction.duckdb")
     read_only: bool = Field(default=False)
@@ -72,7 +78,10 @@ class DatabaseSettings(BaseSettings):
 class HuggingFaceSettings(BaseSettings):
     """Hugging Face Hub configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="HF_")
+    model_config = SettingsConfigDict(
+        env_prefix="HF_",
+        extra="ignore",
+    )
 
     token: str | None = Field(default=None, description="HF API token")
     dataset_repo: str = Field(default="maxsold-auctions")
@@ -105,7 +114,10 @@ class HuggingFaceSettings(BaseSettings):
 class TrainingSettings(BaseSettings):
     """Model training configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        extra="ignore",
+    )
 
     # Device settings
     device: Literal["auto", "cpu", "cuda", "mps"] = Field(default="auto")
@@ -143,7 +155,10 @@ class TrainingSettings(BaseSettings):
 class APISettings(BaseSettings):
     """FastAPI server configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="API_")
+    model_config = SettingsConfigDict(
+        env_prefix="API_",
+        extra="ignore",
+    )
 
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)
@@ -156,7 +171,10 @@ class APISettings(BaseSettings):
 class GradioSettings(BaseSettings):
     """Gradio interface configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="GRADIO_")
+    model_config = SettingsConfigDict(
+        env_prefix="GRADIO_",
+        extra="ignore",
+    )
 
     server_port: int = Field(default=7860)
     share: bool = Field(default=False)
@@ -166,7 +184,7 @@ class Settings(BaseSettings):
     """Main application settings."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -209,6 +227,11 @@ class Settings(BaseSettings):
 # =============================================================================
 # Settings Instance
 # =============================================================================
+
+# Load .env file before initializing settings
+from dotenv import load_dotenv
+
+load_dotenv(PROJECT_ROOT / ".env")
 
 
 @lru_cache

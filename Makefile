@@ -109,6 +109,16 @@ scrape-items-sample:  ## Scrape item data sample for testing (10 auctions)
 	$(PYTHON) -m src.data.item_scraper --limit 10
 	@echo "$(GREEN)Sample item scraping complete!$(NC)"
 
+scrape-enriched:  ## Run MaxSold enriched item data scraper
+	@echo "$(BLUE)Starting MaxSold enriched item scraper...$(NC)"
+	$(PYTHON) -m src.data.enriched_item_scraper
+	@echo "$(GREEN)Enriched item scraping complete!$(NC)"
+
+scrape-enriched-sample:  ## Scrape enriched item data sample for testing (100 items)
+	@echo "$(BLUE)Scraping sample enriched item data...$(NC)"
+	$(PYTHON) -m src.data.enriched_item_scraper --limit 100
+	@echo "$(GREEN)Sample enriched item scraping complete!$(NC)"
+
 # =============================================================================
 # Model Training
 # =============================================================================

@@ -88,6 +88,41 @@ fields:
   
   # Prefix for item columns
   item_column_prefix: "item_"
+  
+  # Enriched item fields to extract from API response
+  enriched_item_fields:
+    - amLotId
+    - amAuctionId
+    - generatedDescription
+  
+  # Nested enriched item fields (stored as JSON strings)
+  enriched_item_json_fields:
+    - brands
+    - categories
+    - items
+    - attributes
+    - photosTaken
+  
+  # Fields within generatedDescription
+  enriched_item_generated_description_fields:
+    - title
+    - slug
+    - description
+    - qualitativeDescription
+    - brand
+    - seriesLine
+    - condition
+    - working
+    - singleKeyItem
+    - numItems
+  
+  # Enriched item field name mappings (old_name: new_name)
+  enriched_item_field_rename_map:
+    amLotId: item_id
+    amAuctionId: auction_id
+  
+  # Prefix for enriched item columns
+  enriched_item_column_prefix: "enriched_item_"
 
 # =============================================================================
 # Data Storage Configuration
@@ -101,6 +136,9 @@ storage:
     # Hugging Face dataset for auction IDs
     hf_dataset_repo: "jpearce610/auction_data"
     hf_auction_id_column: "auction_id"
+    # Hugging Face dataset for item IDs (enriched item scraper)
+    hf_item_dataset_repo: "jpearce610/item_data"
+    hf_item_id_column: "item_id"
   
   # Output data
   output:
@@ -110,12 +148,16 @@ storage:
     item_raw_directory: "data/raw/items"
     item_processed_directory: "data/processed/items"
     item_data_filename: "item_data.parquet"
+    enriched_item_raw_directory: "data/raw/enriched_items"
+    enriched_item_processed_directory: "data/processed/enriched_items"
+    enriched_item_data_filename: "enriched_item_data.parquet"
     metadata_filename: "metadata.json"
   
   # Progress tracking
   progress:
     filename: "scraper_progress.json"
     item_progress_filename: "item_scraper_progress.json"
+    enriched_item_progress_filename: "enriched_item_scraper_progress.json"
 
 # =============================================================================
 # Parallel Processing Configuration
@@ -168,6 +210,24 @@ huggingface:
   # Item files to upload
   item_upload_files:
     - item_data.parquet
+    - metadata.json
+  
+  # Enriched item dataset metadata
+  enriched_item_dataset:
+    name: "maxsold-enriched-item-data"
+    description: "MaxSold enriched item data with detailed item attributes, brands, categories, and metadata"
+    license: "cc-by-4.0"
+    tags:
+      - auction
+      - price-prediction
+      - e-commerce
+      - maxsold
+      - enriched-items
+      - item-attributes
+  
+  # Enriched item files to upload
+  enriched_item_upload_files:
+    - enriched_item_data.parquet
     - metadata.json
 
 # =============================================================================

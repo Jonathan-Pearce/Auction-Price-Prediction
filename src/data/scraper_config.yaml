@@ -71,7 +71,6 @@ fields:
     - end_time
     - bid_count
     - bidding_extended
-    - images
   
   # Field name mappings (old_name: new_name)
   field_rename_map:

@@ -231,6 +231,36 @@ class ItemDataFetcher:
             logger.error(f"Failed to fetch items for auction {auction_id}: {e}")
             return None
 
+    async def fetch_multiple_auctions_streaming(
+        self,
+        auction_ids: list[int],
+        progress_callback=None,
+    ):
+        """
+        Fetch items for multiple auctions with streaming (one at a time) to minimize memory.
+
+        Args:
+            auction_ids: List of auction IDs to fetch
+            progress_callback: Optional callback function for progress updates
+
+        Yields:
+            Tuple of (auction_id, list of items) for each successfully fetched auction
+        """
+        for auction_id in auction_ids:
+            try:
+                result = await self.fetch_and_process_auction(auction_id)
+                if progress_callback:
+                    progress_callback(auction_id, result is not None)
+                
+                if result is not None:
+                    logger.info(f"Fetched {len(result)} items for auction {auction_id}")
+                    yield auction_id, result
+                    
+            except Exception as e:
+                logger.error(f"Exception for auction {auction_id}: {e}")
+                if progress_callback:
+                    progress_callback(auction_id, False)
+
     async def fetch_multiple_auctions(
         self,
         auction_ids: list[int],
@@ -314,6 +344,50 @@ def transform_item_data(items: list[dict[str, Any]]) -> pd.DataFrame:
     logger.debug(f"Added 'item_' prefix to columns: {list(df.columns)}")
 
     return df
+
+
+def append_to_parquet_efficient(df_new: pd.DataFrame, output_file: Path) -> int:
+    """
+    Append DataFrame to parquet file efficiently using pyarrow.
+    
+    This avoids loading the entire existing file into memory.
+    
+    Args:
+        df_new: New data to append
+        output_file: Path to parquet file
+        
+    Returns:
+        Total number of rows after append
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    
+    if output_file.exists():
+        # Read existing parquet file metadata to get row count
+        existing_table = pq.read_table(output_file)
+        existing_count = len(existing_table)
+        
+        # Convert new df to arrow table
+        new_table = pa.Table.from_pandas(df_new, preserve_index=False)
+        
+        # Write both tables to parquet
+        combined_table = pa.concat_tables([existing_table, new_table])
+        pq.write_table(combined_table, output_file)
+        
+        total_count = len(combined_table)
+        logger.info(f"Appended {len(df_new)} rows (total: {total_count})")
+        
+        # Clean up
+        del existing_table
+        del new_table
+        del combined_table
+        
+        return total_count
+    else:
+        # First write
+        df_new.to_parquet(output_file, index=False)
+        logger.info(f"Created {output_file} with {len(df_new)} records")
+        return len(df_new)
 
 
 # =============================================================================
@@ -465,9 +539,10 @@ async def scrape_items(
     max_workers: int = config.DEFAULT_MAX_WORKERS,
     rate_limit: int = config.DEFAULT_RATE_LIMIT,
     output_file: Path | None = None,
+    batch_size: int = 100,  # Process auctions in batches to reduce memory
 ) -> pd.DataFrame:
     """
-    Scrape item data from MaxSold API.
+    Scrape item data from MaxSold API with batch processing for memory efficiency.
 
     Args:
         auction_ids: List of auction IDs to scrape (if None, loads from Hugging Face)
@@ -476,6 +551,7 @@ async def scrape_items(
         max_workers: Maximum parallel workers
         rate_limit: Maximum requests per second
         output_file: Output file path (if None, uses default from config)
+        batch_size: Number of auctions to process per batch (default: 100)
 
     Returns:
         DataFrame with scraped item data
@@ -504,7 +580,17 @@ async def scrape_items(
 
     if not auction_ids:
         logger.warning("No auctions to scrape")
+        # Return existing data if available
+        if output_file is None:
+            output_file = config.ITEM_PROCESSED_OUTPUT_DIR / config.ITEM_DATA_FILENAME
+        if output_file.exists():
+            return pd.read_parquet(output_file)
         return pd.DataFrame()
+
+    # Setup output file
+    if output_file is None:
+        output_file = config.ITEM_PROCESSED_OUTPUT_DIR / config.ITEM_DATA_FILENAME
+    output_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Setup progress callback
     def progress_callback(auction_id: int, success: bool) -> None:
@@ -515,32 +601,74 @@ async def scrape_items(
                 tracker.mark_failed(auction_id)
             tracker.save()
 
-    # Fetch items
-    logger.info(f"Starting to scrape items from {len(auction_ids)} auctions...")
-
-    async with ItemDataFetcher(
-        rate_limit=rate_limit,
-        max_concurrent=max_workers,
-    ) as fetcher:
-        items = await fetcher.fetch_multiple_auctions(
-            auction_ids,
-            progress_callback=progress_callback if use_progress_tracking else None,
+    # Process auctions in concurrent chunks with periodic writes to balance speed and memory
+    logger.info(
+        f"Starting to scrape items from {len(auction_ids)} auctions "
+        f"(max {max_workers} concurrent, write every {batch_size} auctions)..."
+    )
+    
+    total_items_scraped = 0
+    auctions_processed = 0
+    accumulated_items = []
+    
+    # Process in chunks
+    for chunk_start in range(0, len(auction_ids), batch_size):
+        chunk_ids = auction_ids[chunk_start : chunk_start + batch_size]
+        chunk_num = chunk_start // batch_size + 1
+        total_chunks = (len(auction_ids) + batch_size - 1) // batch_size
+        
+        logger.info(
+            f"Processing chunk {chunk_num}/{total_chunks} with {len(chunk_ids)} auctions "
+            f"(progress: {auctions_processed}/{len(auction_ids)})"
         )
 
-    # Transform data
-    logger.info(f"Transforming {len(items)} item records...")
-    df = transform_item_data(items)
+        # Fetch items for this chunk with concurrency
+        async with ItemDataFetcher(
+            rate_limit=rate_limit,
+            max_concurrent=max_workers,
+        ) as fetcher:
+            chunk_items = await fetcher.fetch_multiple_auctions(
+                chunk_ids,
+                progress_callback=progress_callback if use_progress_tracking else None,
+            )
+        
+        # Add to accumulated items
+        accumulated_items.extend(chunk_items)
+        auctions_processed += len(chunk_ids)
+        
+        logger.info(
+            f"Chunk {chunk_num} fetched {len(chunk_items)} items. "
+            f"Accumulated: {len(accumulated_items)} items"
+        )
+        
+        # Write accumulated items to disk and clear memory
+        if accumulated_items:
+            df_batch = transform_item_data(accumulated_items)
+            
+            if not df_batch.empty:
+                total_items_scraped = append_to_parquet_efficient(df_batch, output_file)
+                logger.info(
+                    f"Saved chunk {chunk_num}. Total in file: {total_items_scraped:,} items"
+                )
+            
+            # Clear memory
+            del df_batch
+            del accumulated_items
+            del chunk_items
+            accumulated_items = []  # Reset for next chunk
+        
+        logger.info(
+            f"Progress: {auctions_processed}/{len(auction_ids)} auctions complete"
+        )
 
-    # Save to file
-    if output_file is None:
-        output_file = config.ITEM_PROCESSED_OUTPUT_DIR / config.ITEM_DATA_FILENAME
-
-    if not df.empty:
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(output_file, index=False)
-        logger.info(f"Saved {len(df)} records to {output_file}")
-
-    return df
+    # Load final result
+    if output_file.exists():
+        df = pd.read_parquet(output_file)
+        logger.info(f"Final dataset: {len(df)} records saved to {output_file}")
+        return df
+    else:
+        logger.warning("No data was scraped")
+        return pd.DataFrame()
 
 
 # =============================================================================
@@ -684,6 +812,12 @@ def main() -> None:
         help=f"Requests per second (default: {config.DEFAULT_RATE_LIMIT})",
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=100,
+        help="Auctions per batch for memory efficiency (default: 100)",
+    )
+    parser.add_argument(
         "--output",
         type=str,
         help="Output file path",
@@ -722,6 +856,7 @@ def main() -> None:
             max_workers=args.workers,
             rate_limit=args.rate_limit,
             output_file=Path(args.output) if args.output else None,
+            batch_size=args.batch_size,
         )
     )
 

@@ -196,25 +196,43 @@ Run validation script:
 python3 << 'EOF'
 import yaml
 import os
+import sys
 
-# Check all instruction files exist
-config_file = '.github/copilot-instructions.yml'
-with open(config_file) as f:
-    config = yaml.safe_load(f)
-
-for instr in config['instructions']:
-    path = os.path.join('.github', instr['path'])
-    if os.path.exists(path):
-        print(f"✓ {path}")
-    else:
-        print(f"✗ {path} (missing)")
+try:
+    # Check all instruction files exist
+    config_file = '.github/copilot-instructions.yml'
+    
+    if not os.path.exists(config_file):
+        print(f"✗ Configuration file not found: {config_file}")
+        sys.exit(1)
+    
+    with open(config_file) as f:
+        config = yaml.safe_load(f)
+    
+    if 'instructions' not in config:
+        print(f"✗ Configuration missing 'instructions' key")
+        sys.exit(1)
+    
+    for instr in config['instructions']:
+        path = os.path.join('.github', instr['path'])
+        if os.path.exists(path):
+            print(f"✓ {path}")
+        else:
+            print(f"✗ {path} (missing)")
+            
+except yaml.YAMLError as e:
+    print(f"✗ YAML parsing error: {e}")
+    sys.exit(1)
+except Exception as e:
+    print(f"✗ Error: {e}")
+    sys.exit(1)
 EOF
 ```
 
 ## Resources
 
 - [GitHub Copilot Documentation](https://docs.github.com/en/copilot)
-- [Best Practices for Copilot Instructions](https://gh.io/copilot-coding-agent-tips)
+- [GitHub Copilot Workspace Documentation](https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-in-your-repository)
 - [YAML Frontmatter Specification](https://jekyllrb.com/docs/front-matter/)
 
 ## Troubleshooting

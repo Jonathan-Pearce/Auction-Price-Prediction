@@ -1,0 +1,155 @@
+
+FEATURE ENGINEERING PLAN FOR ITEM PRICE PREDICTION
+==================================================
+
+Target Variable: item_winning_price (winning bid amount)
+
+Key Considerations:
+- Zero-bid items (items with no bids) need special handling
+- Consider two-stage model: (1) predict has_bids, (2) predict price if sold
+- Prices are right-skewed; consider log transformation for modeling
+- Soft-close mechanism affects bidding patterns
+
+RECOMMENDED FEATURES BY CATEGORY:
+==================================
+
+1. ITEM CHARACTERISTICS
+-----------------------
+- title_word_count: Number of words in item title
+- description_word_count: Number of words in description
+- description_length: Character count of description
+- has_description: Boolean indicator
+- has_dimensions: Boolean for dimension info
+- image_count: Number of images for item
+- has_multiple_images: Boolean (>1 image)
+- condition_encoded: Label encoding or one-hot for condition
+- category_encoded: Hierarchical encoding of categories
+
+2. PRICING FEATURES
+-------------------
+- starting_bid: Initial bid amount (important baseline)
+- starting_bid_log: Log-transformed starting bid
+- estimated_value_mid: (estimated_low + estimated_high) / 2
+- estimated_value_range: estimated_high - estimated_low
+- has_reserve: Boolean for reserve price existence
+
+3. BIDDING ACTIVITY FEATURES
+-----------------------------
+- bid_count: Total number of bids (strong predictor)
+- unique_bidders: Number of distinct bidders
+- bid_velocity: bids per hour
+- avg_time_between_bids: Average time between consecutive bids
+- time_to_first_bid: Hours from auction start to first bid
+- soft_close_extensions: Number of 2-minute extensions
+- last_hour_bid_count: Bids in final hour
+- bid_increment_avg: Average increase between bids
+- bid_increment_std: Variance in bid increments
+
+4. TEMPORAL FEATURES
+--------------------
+- auction_day_of_week: Monday=0, Sunday=6
+- auction_start_hour: Hour of day (0-23)
+- is_weekend: Boolean
+- days_until_close: Time from item listing to close
+- auction_duration_hours: Total auction duration
+- closing_hour: Hour when auction closes (important!)
+- is_prime_time: Boolean (6pm-10pm)
+
+5. AUCTION CONTEXT FEATURES
+----------------------------
+- auction_total_items: Size of parent auction
+- lot_number: Position in auction
+- lot_number_normalized: lot_number / total_items
+- auction_type: Type of auction (estate, downsizing, etc.)
+- is_early_lot: Boolean (first 20% of items)
+- is_late_lot: Boolean (last 20% of items)
+
+6. LOCATION FEATURES
+--------------------
+- location_city_encoded: Label/target encoding
+- location_province_encoded: Province encoding
+- is_major_city: Toronto, Montreal, Vancouver
+- distance_from_major_city: If location data available
+
+7. HISTORICAL FEATURES (require historical data)
+------------------------------------------------
+- category_avg_price: Historical average for category
+- category_median_price: Historical median
+- category_sell_rate: % of items that sell (>0 bids)
+- similar_item_avg_price: Price of similar items
+- seller_avg_price: If seller ID available
+- seller_sell_rate: If seller ID available
+
+8. TEXT FEATURES (for Text Model)
+----------------------------------
+- TF-IDF vectors from title + description
+- BERT/DistilBERT embeddings
+- Named entity recognition (brand names, materials)
+- Sentiment score
+- Reading difficulty score
+- Keyword presence (e.g., "vintage", "rare", "new")
+
+9. IMAGE FEATURES (for Image Model)
+------------------------------------
+- Primary image embedding (ResNet, EfficientNet)
+- Average embedding across all images
+- Image quality metrics (resolution, brightness)
+- Object detection counts
+- Color histogram features
+- Has_professional_photo: Boolean
+
+10. SEQUENTIAL FEATURES (for Bid Sequence Model)
+-------------------------------------------------
+- Bid amount sequence (time-ordered)
+- Bid time intervals
+- Bidder ID sequence patterns
+- Bid acceleration (increasing bid frequency)
+- Competitive bidding indicator
+
+DERIVED/INTERACTION FEATURES:
+=============================
+- views_per_image: viewed / image_count
+- bids_per_view: bid_count / viewed
+- starting_bid_to_category_avg: starting_bid / category_avg_price
+- price_to_estimate_ratio: winning_price / estimated_value_mid
+- bid_density: bid_count / auction_duration_hours
+
+SPECIAL HANDLING:
+=================
+1. Zero-bid Items:
+   - Create binary classifier first
+   - Train separate model for price given has_bids=True
+   - Or use zero-inflated regression models
+
+2. Outliers:
+   - Log transform prices for modeling
+   - Clip extreme values (e.g., 99th percentile)
+   - Robust scaling for features
+
+3. Missing Values:
+   - Indicator variables for missingness
+   - Median/mode imputation for numerics/categoricals
+   - "unknown" category for missing text
+
+4. Categorical Encoding:
+   - Target encoding for high-cardinality (location)
+   - One-hot for low-cardinality (condition)
+   - Frequency encoding for categories
+
+FEATURE IMPORTANCE PRIORITIES:
+==============================
+Based on domain knowledge, likely most important features:
+1. bid_count (# of bids is strongest signal)
+2. starting_bid (baseline price)
+3. category (type of item)
+4. condition (item quality)
+5. viewed (interest level)
+6. image_count (presentation quality)
+7. auction_type (context)
+8. temporal features (timing matters)
+
+MODEL RECOMMENDATIONS:
+======================
+- Tabular Model: XGBoost or LightGBM (handles zero-bids well)
+- Ensemble: Combine tabular, text, image, and sequential models
+- Two-stage: Classification (has_bids) + Regression (price)

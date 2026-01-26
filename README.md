@@ -77,13 +77,25 @@ pip install -e ".[dev]"
 
 ### Data Collection
 
+**Auction-level data** (aggregated metrics per auction):
 ```bash
-# Scrape auction data from MaxSold
+# Scrape auction-level data with aggregated item metrics
+python -m src.data.auction_scraper --limit 100
+
+# Upload to Hugging Face
+python -m src.data.auction_scraper --limit 100 --upload-hf
+```
+
+**Item-level data** (detailed item and bid history):
+```bash
+# Scrape item-level data from MaxSold
 make scrape
 
 # Or run directly
 python -m src.data.scraper
 ```
+
+See [AUCTION_SCRAPER.md](docs/AUCTION_SCRAPER.md) for detailed documentation.
 
 ### Training Models
 
@@ -116,7 +128,9 @@ Visit `http://localhost:8000` for the API docs or `http://localhost:7860` for th
 ├── src/                    # Main source code
 │   ├── data/              # Data collection (scraping)
 │   │   ├── maxsold_client.py
-│   │   ├── scraper.py
+│   │   ├── scraper.py     # Item-level scraper
+│   │   ├── auction_scraper.py  # Auction-level scraper
+│   │   ├── scraper_config.py   # Scraper configuration
 │   │   └── schemas.py
 │   ├── modeling/          # ML models
 │   │   ├── train.py

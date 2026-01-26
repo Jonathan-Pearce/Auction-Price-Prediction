@@ -1,0 +1,148 @@
+# =============================================================================
+# Web Scraping Configuration for MaxSold Auction Data
+# =============================================================================
+# This YAML file contains all configuration values for the auction data scraping process.
+# Including API endpoints, field mappings, rate limiting, and output settings.
+
+# =============================================================================
+# API Configuration
+# =============================================================================
+api:
+  # Base URLs
+  base_url: "https://maxsold.maxsold.com/msapi"
+  enriched_base_url: "https://api.maxsold.com"
+  
+  # Endpoint templates
+  endpoints:
+    auction_items: "/auctions/items"
+    enriched_item: "/listings/am/{item_id}/enriched"
+  
+  # API parameters
+  parameters:
+    items_limit: 2500
+    timeout: 30  # seconds
+    max_retries: 3
+    retry_delay: 1.0  # seconds
+
+# =============================================================================
+# Rate Limiting Configuration
+# =============================================================================
+rate_limiting:
+  requests_per_second: 10
+  concurrent_requests: 5  # maximum concurrent auction fetches
+
+# =============================================================================
+# Data Field Configuration
+# =============================================================================
+fields:
+  # Auction-level fields to extract from API response
+  auction_fields:
+    - id
+    - title
+    - starts
+    - ends
+    - last_item_closes
+    - removal_info
+    - intro
+    - pickup_time
+    - partner_url
+    - extended_bidding
+    - extended_bidding_interval
+    - extended_bidding_threshold
+    - catalog_lots
+  
+  # Item-level fields to aggregate
+  item_aggregate_fields:
+    - viewed
+    - current_bid
+    - bid_count
+  
+  # Field name mappings (old_name: new_name)
+  field_rename_map:
+    catalog_lots: item_count
+    current_bid: winning_price
+    id: id  # Keep id as-is initially, will add prefix later
+  
+  # Prefix to add to all column names
+  column_prefix: "auction_"
+
+# =============================================================================
+# Data Storage Configuration
+# =============================================================================
+storage:
+  # Input data
+  input:
+    file: "auction_location_data.parquet"
+    directory: "data/raw"
+    id_column: "amAuctionId"
+  
+  # Output data
+  output:
+    raw_directory: "data/raw/auctions"
+    processed_directory: "data/processed/auctions"
+    auction_data_filename: "auction_data.parquet"
+    metadata_filename: "metadata.json"
+  
+  # Progress tracking
+  progress:
+    filename: "scraper_progress.json"
+
+# =============================================================================
+# Parallel Processing Configuration
+# =============================================================================
+parallel_processing:
+  # Batch processing
+  batch:
+    default_size: 100
+    min_size: 1
+    max_size: 1000
+  
+  # Parallel workers
+  workers:
+    default_max: 5
+    min: 1
+    max: 20
+
+# =============================================================================
+# Hugging Face Configuration
+# =============================================================================
+huggingface:
+  # Dataset metadata
+  dataset:
+    name: "maxsold-auction-data"
+    description: "MaxSold auction data with aggregated item metrics"
+    license: "cc-by-4.0"
+    tags:
+      - auction
+      - price-prediction
+      - e-commerce
+      - maxsold
+  
+  # Files to upload
+  upload_files:
+    - auction_data.parquet
+    - metadata.json
+
+# =============================================================================
+# Validation Configuration
+# =============================================================================
+validation:
+  # Required fields in final dataset (after renaming and prefixing)
+  required_output_fields:
+    - auction_id
+    - auction_title
+    - auction_item_count
+    - auction_total_viewed
+    - auction_total_winning_price
+    - auction_total_bid_count
+    - auction_total_images
+  
+  # Fields that should be numeric
+  numeric_fields:
+    - item_count
+    - total_viewed
+    - total_winning_price
+    - total_bid_count
+    - total_images
+    - extended_bidding_interval
+    - extended_bidding_threshold

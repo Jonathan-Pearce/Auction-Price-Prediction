@@ -10,7 +10,9 @@ This document covers the data pipeline from collection through feature engineeri
 
 ## Data Sources
 
-### MaxSold API Endpoints
+### Primary Data: MaxSold API
+
+MaxSold auction data is collected via their public API endpoints:
 
 | Endpoint | Purpose | Data Retrieved |
 |----------|---------|----------------|
@@ -19,6 +21,17 @@ This document covers the data pipeline from collection through feature engineeri
 | Enriched Info | Additional metadata | Category hierarchy, estimates, keywords |
 
 See [references/maxsold-api-reference.md](../references/maxsold-api-reference.md) for complete API documentation.
+
+### Enriched Data: Canadian Demographics & Economics
+
+In addition to MaxSold data, we incorporate **enriched datasets** based on Forward Sortation Areas (FSA - first 3 characters of Canadian postal codes):
+
+| Dataset | Source | Purpose |
+|---------|--------|---------|
+| Population & Dwelling Counts | Statistics Canada (2021 Census) | Demographic characteristics, urbanization proxy |
+| Individual Tax Statistics | Canada Revenue Agency (2021 tax year) | Income levels, economic indicators |
+
+These datasets enable geographic and economic features for auction predictions. See [ENRICHED_DATA.md](ENRICHED_DATA.md) for complete documentation on enriched data sources, schemas, and feature engineering.
 
 ---
 

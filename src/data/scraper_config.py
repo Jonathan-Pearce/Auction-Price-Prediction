@@ -114,6 +114,13 @@ def get_item_column_prefix() -> str:
     return get_config_value("fields", "item_column_prefix", default="item_")
 
 
+def get_enriched_auction_column_prefix() -> str:
+    """Get enriched auction column prefix configuration."""
+    return get_config_value(
+        "fields", "enriched_auction_column_prefix", default="enriched_auction_"
+    )
+
+
 def get_item_fields() -> list[str]:
     """Get item-level fields configuration."""
     return get_config_value("fields", "item_fields", default=[])
@@ -137,6 +144,14 @@ def get_bid_fields() -> list[str]:
 def get_bid_field_rename_map() -> dict[str, str]:
     """Get bid field name mapping configuration."""
     return get_config_value("fields", "bid_field_rename_map", default={})
+def get_enriched_auction_fields() -> list[str]:
+    """Get enriched auction-level fields configuration."""
+    return get_config_value("fields", "enriched_auction_fields", default=[])
+
+
+def get_enriched_auction_field_rename_map() -> dict[str, str]:
+    """Get enriched auction field name mapping configuration."""
+    return get_config_value("fields", "enriched_auction_field_rename_map", default={})
 
 
 # =============================================================================
@@ -192,6 +207,18 @@ def get_item_progress_file() -> Path:
     return item_raw_dir / filename
 
 
+def get_enriched_auction_progress_file() -> Path:
+    """Get path to enriched auction scraper progress tracking file."""
+    enriched_raw_dir = get_enriched_auction_output_directory(processed=False)
+    filename = get_config_value(
+        "storage",
+        "progress",
+        "enriched_auction_progress_filename",
+        default="enriched_auction_scraper_progress.json",
+    )
+    return enriched_raw_dir / filename
+
+
 def get_item_output_directory(processed: bool = True) -> Path:
     """
     Get item output directory path.
@@ -230,6 +257,22 @@ def get_bid_output_directory(processed: bool = True) -> Path:
         Path to output directory
     """
     key = "bid_processed_directory" if processed else "bid_raw_directory"
+def get_enriched_auction_output_directory(processed: bool = True) -> Path:
+    """
+    Get enriched auction output directory path.
+
+    Args:
+        processed: If True, returns enriched auction processed directory;
+                   otherwise enriched auction raw directory
+
+    Returns:
+        Path to enriched auction output directory
+    """
+    key = (
+        "enriched_auction_processed_directory"
+        if processed
+        else "enriched_auction_raw_directory"
+    )
     directory = get_config_value("storage", "output", key)
     return PROJECT_ROOT / directory
 
@@ -295,6 +338,20 @@ def get_renamed_item_field_name(field_name: str) -> str:
     return rename_map.get(field_name, field_name)
 
 
+def get_renamed_enriched_auction_field_name(field_name: str) -> str:
+    """
+    Get renamed enriched auction field name based on configuration mapping.
+
+    Args:
+        field_name: Original enriched auction field name
+
+    Returns:
+        Renamed field name (or original if no mapping exists)
+    """
+    rename_map = get_enriched_auction_field_rename_map()
+    return rename_map.get(field_name, field_name)
+
+
 def get_prefixed_field_name(field_name: str) -> str:
     """
     Add configured prefix to field name.
@@ -346,6 +403,9 @@ def get_renamed_bid_field_name(field_name: str) -> str:
 def get_prefixed_bid_field_name(field_name: str) -> str:
     """
     Add configured bid prefix to field name.
+def get_prefixed_enriched_auction_field_name(field_name: str) -> str:
+    """
+    Add configured enriched auction prefix to field name.
 
     Exception: auction_id and item_id do not get the prefix and remain as-is.
 
@@ -360,6 +420,13 @@ def get_prefixed_bid_field_name(field_name: str) -> str:
         return field_name
 
     prefix = get_bid_column_prefix()
+        Prefixed field name with enriched_auction_ prefix (except for auction_id and item_id)
+    """
+    # Exception: auction_id and item_id should not have the enriched_auction_ prefix
+    if field_name in ["auction_id", "item_id"]:
+        return field_name
+
+    prefix = get_enriched_auction_column_prefix()
     return f"{prefix}{field_name}"
 
 
@@ -409,6 +476,20 @@ def apply_bid_field_transformations(field_name: str) -> str:
     renamed = get_renamed_bid_field_name(field_name)
     # Then add bid_ prefix
     return get_prefixed_bid_field_name(renamed)
+def apply_enriched_auction_field_transformations(field_name: str) -> str:
+    """
+    Apply all enriched auction field transformations (rename + enriched_auction_ prefix).
+
+    Args:
+        field_name: Original enriched auction field name
+
+    Returns:
+        Fully transformed field name with enriched_auction_ prefix
+    """
+    # First rename
+    renamed = get_renamed_enriched_auction_field_name(field_name)
+    # Then add enriched_auction_ prefix
+    return get_prefixed_enriched_auction_field_name(renamed)
 
 
 def transform_field_dict(data: dict[str, Any]) -> dict[str, Any]:
@@ -513,6 +594,7 @@ def get_output_filepath(filename: str | None = None, processed: bool = True) -> 
 MAXSOLD_API_BASE_URL = get_api_base_url()
 AUCTION_ITEMS_ENDPOINT = get_api_endpoint("auction_items")
 ENRICHED_ITEM_ENDPOINT = f"{get_config_value('api', 'enriched_base_url')}{get_config_value('api', 'endpoints', 'enriched_item')}"
+ENRICHED_AUCTION_ENDPOINT = f"{get_config_value('api', 'enriched_base_url')}{get_config_value('api', 'endpoints', 'enriched_auction')}"
 DEFAULT_ITEMS_LIMIT = get_config_value("api", "parameters", "items_limit", default=2500)
 REQUEST_TIMEOUT = get_config_value("api", "parameters", "timeout", default=30)
 MAX_RETRIES = get_config_value("api", "parameters", "max_retries", default=3)
@@ -528,6 +610,7 @@ CONCURRENT_REQUESTS = get_config_value(
 AUCTION_FIELDS = get_config_value("fields", "auction_fields", default=[])
 ITEM_AGGREGATE_FIELDS = get_config_value("fields", "item_aggregate_fields", default=[])
 ITEM_FIELDS = get_config_value("fields", "item_fields", default=[])
+ENRICHED_AUCTION_FIELDS = get_enriched_auction_fields()
 FIELD_RENAME_MAP = get_field_rename_map()
 ITEM_FIELD_RENAME_MAP = get_item_field_rename_map()
 BID_FIELD_RENAME_MAP = get_bid_field_rename_map()
@@ -535,6 +618,10 @@ COLUMN_PREFIX = get_column_prefix()
 ITEM_COLUMN_PREFIX = get_item_column_prefix()
 BID_COLUMN_PREFIX = get_bid_column_prefix()
 BID_FIELDS = get_config_value("fields", "bid_fields", default=[])
+ENRICHED_AUCTION_FIELD_RENAME_MAP = get_enriched_auction_field_rename_map()
+COLUMN_PREFIX = get_column_prefix()
+ITEM_COLUMN_PREFIX = get_item_column_prefix()
+ENRICHED_AUCTION_COLUMN_PREFIX = get_enriched_auction_column_prefix()
 
 # Storage Configuration
 AUCTION_IDS_FILE = get_auction_ids_file()
@@ -549,6 +636,10 @@ ITEM_RAW_OUTPUT_DIR = get_item_output_directory(processed=False)
 ITEM_PROCESSED_OUTPUT_DIR = get_item_output_directory(processed=True)
 BID_RAW_OUTPUT_DIR = get_bid_output_directory(processed=False)
 BID_PROCESSED_OUTPUT_DIR = get_bid_output_directory(processed=True)
+ENRICHED_AUCTION_RAW_OUTPUT_DIR = get_enriched_auction_output_directory(processed=False)
+ENRICHED_AUCTION_PROCESSED_OUTPUT_DIR = get_enriched_auction_output_directory(
+    processed=True
+)
 AUCTION_DATA_FILENAME = get_config_value(
     "storage", "output", "auction_data_filename", default="auction_data.parquet"
 )
@@ -557,6 +648,11 @@ ITEM_DATA_FILENAME = get_config_value(
 )
 BID_DATA_FILENAME = get_config_value(
     "storage", "output", "bid_data_filename", default="bid_data.parquet"
+ENRICHED_AUCTION_DATA_FILENAME = get_config_value(
+    "storage",
+    "output",
+    "enriched_auction_data_filename",
+    default="enriched_auction_data.parquet",
 )
 METADATA_FILENAME = get_config_value(
     "storage", "output", "metadata_filename", default="metadata.json"
@@ -564,6 +660,7 @@ METADATA_FILENAME = get_config_value(
 PROGRESS_FILE = get_progress_file()
 ITEM_PROGRESS_FILE = get_item_progress_file()
 BID_PROGRESS_FILE = get_bid_progress_file()
+ENRICHED_AUCTION_PROGRESS_FILE = get_enriched_auction_progress_file()
 
 # Parallel Processing Configuration
 DEFAULT_BATCH_SIZE = get_config_value(
@@ -621,6 +718,25 @@ HF_BID_DATASET_TAGS = get_config_value(
     "huggingface", "bid_dataset", "tags", default=[]
 )
 HF_BID_UPLOAD_FILES = get_config_value("huggingface", "bid_upload_files", default=[])
+# Enriched Auction Dataset Configuration
+HF_ENRICHED_AUCTION_DATASET_NAME = get_config_value(
+    "huggingface",
+    "enriched_auction_dataset",
+    "name",
+    default="maxsold-enriched-auction-data",
+)
+HF_ENRICHED_AUCTION_DATASET_DESCRIPTION = get_config_value(
+    "huggingface", "enriched_auction_dataset", "description", default=""
+)
+HF_ENRICHED_AUCTION_DATASET_LICENSE = get_config_value(
+    "huggingface", "enriched_auction_dataset", "license", default="cc-by-4.0"
+)
+HF_ENRICHED_AUCTION_DATASET_TAGS = get_config_value(
+    "huggingface", "enriched_auction_dataset", "tags", default=[]
+)
+HF_ENRICHED_AUCTION_UPLOAD_FILES = get_config_value(
+    "huggingface", "enriched_auction_upload_files", default=[]
+)
 
 # Validation Configuration
 REQUIRED_OUTPUT_FIELDS = get_config_value(

@@ -202,35 +202,35 @@ class AuctionDataFetcher:
         # Aggregate item-level metrics
         # Handle nested structure: items can be a dict with numeric keys or a list
         items_to_process = []
-        
+
         if isinstance(items, dict):
             # Items are structured as {0: item_data, 1: item_data, ...}
             items_to_process = list(items.values())
         elif isinstance(items, list):
             # Items are already a list
             items_to_process = items
-        
+
         # Initialize aggregations
         result["total_viewed"] = 0
         result["total_winning_price"] = 0
         result["total_bid_count"] = 0
         result["total_images"] = 0
-        
+
         # Loop over each item and aggregate
         for item in items_to_process:
             # Skip if item is not a dict
             if not isinstance(item, dict):
                 continue
-            
+
             # Aggregate viewed count
             result["total_viewed"] += item.get("viewed", 0)
-            
+
             # Aggregate winning price (current_bid)
             result["total_winning_price"] += item.get("current_bid", 0)
-            
+
             # Aggregate bid count
             result["total_bid_count"] += item.get("bid_count", 0)
-            
+
             # Count images
             images = item.get("images", [])
             if isinstance(images, list):

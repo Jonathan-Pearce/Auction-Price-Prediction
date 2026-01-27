@@ -1,24 +1,24 @@
 # =============================================================================
-# Item Data Scraper
+# Image Data Scraper
 # =============================================================================
 """
-Scraper for item-level data from MaxSold auctions.
+Scraper for image data from MaxSold auctions.
 
 This module implements the requirements from the issue:
-1. Scrapes item data from MaxSold API
-2. Loads auction IDs from Hugging Face dataset (jpearce610/auction_data)
-3. Extracts specified item fields (id, auction_id, title, description, etc.)
-4. Adds 'item_' prefix to all column names (except auction_id)
-5. Uses parallel processing for faster scraping
+1. Scrapes image URLs from MaxSold API
+2. Downloads images with parallel processing
+3. Processes images (resize to 224 pixels, maintain aspect ratio)
+4. Uses MobileNetV3 ONNX model with OpenCV for feature extraction
+5. Extracts 576-dim embeddings from the second-to-last layer
 6. Uploads to Hugging Face
 
 Usage:
     # From command line
-    python -m src.data.item_scraper --limit 100
+    python -m src.data.image_scraper --limit 100
 
     # From Python
-    from src.data.item_scraper import scrape_items
-    df = await scrape_items(auction_ids=[99941, 99942])
+    from src.data.image_scraper import scrape_images
+    df = await scrape_images(auction_ids=[99941, 99942])
 """
 
 import argparse
@@ -28,7 +28,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import cv2
 import httpx
+import numpy as np
+import onnx
+import onnxruntime as ort
 import pandas as pd
 from loguru import logger
 from tenacity import (
@@ -38,53 +42,245 @@ from tenacity import (
     wait_exponential,
 )
 
+from src.config import PROJECT_ROOT
 from src.data import scraper_config as config
 
 # =============================================================================
-# Item Data Fetcher
+# Image Embedding Extractor
 # =============================================================================
 
 
-class ItemDataFetcher:
+class ImageEmbeddingExtractor:
     """
-    Fetches and processes item data from MaxSold API.
+    Extracts image embeddings using MobileNetV3 ONNX model with OpenCV.
+
+    The model extracts 576-dimensional feature embeddings from the
+    second-to-last layer (after GlobalAveragePool and Flatten).
+    """
+
+    def __init__(
+        self,
+        model_path: str | Path | None = None,
+        target_size: tuple[int, int] = (224, 224),
+        mean: list[float] | None = None,
+        std: list[float] | None = None,
+    ):
+        """
+        Initialize the embedding extractor.
+
+        Args:
+            model_path: Path to ONNX model file
+            target_size: Target image size (width, height)
+            mean: Normalization mean (default: ImageNet mean)
+            std: Normalization std (default: ImageNet std)
+        """
+        # Get configuration
+        model_config = config.IMAGE_MODEL_CONFIG
+        preprocess_config = config.IMAGE_PREPROCESSING_CONFIG
+
+        if model_path is None:
+            model_path = PROJECT_ROOT / model_config["onnx_file"]
+        self.model_path = Path(model_path)
+
+        if not self.model_path.exists():
+            raise FileNotFoundError(f"ONNX model not found: {self.model_path}")
+
+        self.target_size = target_size or tuple(preprocess_config["target_size"])
+        self.mean = np.array(mean or preprocess_config["mean"], dtype=np.float32)
+        self.std = np.array(std or preprocess_config["std"], dtype=np.float32)
+
+        # Expected embedding dimension
+        self.embedding_dim = model_config["embedding_dim"]
+
+        # ONNX session will be initialized lazily
+        self._session: ort.InferenceSession | None = None
+        self._input_name: str | None = None
+
+    def _ensure_session(self) -> None:
+        """Initialize ONNX runtime session with intermediate output."""
+        if self._session is not None:
+            return
+
+        logger.info(f"Loading ONNX model from {self.model_path}")
+
+        # Load and modify model to output intermediate layer
+        model = onnx.load(str(self.model_path))
+
+        # Add the flatten output as an additional output (576-dim embedding)
+        from onnx import helper
+
+        flatten_output_name = "/Flatten_output_0"
+        output_node = helper.make_tensor_value_info(
+            flatten_output_name, onnx.TensorProto.FLOAT, [1, self.embedding_dim]
+        )
+        model.graph.output.append(output_node)
+
+        # Create session from modified model
+        model_bytes = model.SerializeToString()
+        self._session = ort.InferenceSession(
+            model_bytes, providers=["CPUExecutionProvider"]
+        )
+        self._input_name = self._session.get_inputs()[0].name
+
+        logger.info(
+            f"ONNX model loaded successfully. "
+            f"Input: {self._input_name}, Embedding dim: {self.embedding_dim}"
+        )
+
+    def preprocess_image(self, image_bytes: bytes) -> np.ndarray | None:
+        """
+        Preprocess image for model input using OpenCV.
+
+        Args:
+            image_bytes: Raw image bytes from HTTP response
+
+        Returns:
+            Preprocessed image as numpy array (1, 3, 224, 224) or None if failed
+        """
+        try:
+            # Decode image from bytes
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+            if img is None:
+                logger.warning("Failed to decode image")
+                return None
+
+            # Convert BGR to RGB (OpenCV loads as BGR)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+            # Resize maintaining aspect ratio
+            h, w = img.shape[:2]
+            max_dim = max(h, w)
+            target_max = self.target_size[0]  # 224
+
+            if max_dim > target_max:
+                scale = target_max / max_dim
+                new_w = int(w * scale)
+                new_h = int(h * scale)
+                img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+            # Pad to target size (center padding)
+            h, w = img.shape[:2]
+            target_h, target_w = self.target_size
+
+            pad_top = (target_h - h) // 2
+            pad_bottom = target_h - h - pad_top
+            pad_left = (target_w - w) // 2
+            pad_right = target_w - w - pad_left
+
+            img = cv2.copyMakeBorder(
+                img,
+                pad_top,
+                pad_bottom,
+                pad_left,
+                pad_right,
+                cv2.BORDER_CONSTANT,
+                value=(0, 0, 0),
+            )
+
+            # Normalize to [0, 1] and apply ImageNet normalization
+            img = img.astype(np.float32) / 255.0
+            img = (img - self.mean) / self.std
+
+            # Convert to CHW format (channels first) and add batch dimension
+            img = np.transpose(img, (2, 0, 1))  # HWC -> CHW
+            img = np.expand_dims(img, axis=0)  # Add batch dimension
+
+            return img.astype(np.float32)
+
+        except Exception as e:
+            logger.error(f"Error preprocessing image: {e}")
+            return None
+
+    def extract_embedding(self, image_bytes: bytes) -> np.ndarray | None:
+        """
+        Extract embedding from image bytes.
+
+        Args:
+            image_bytes: Raw image bytes
+
+        Returns:
+            576-dimensional embedding as numpy array or None if failed
+        """
+        self._ensure_session()
+
+        # Preprocess image
+        preprocessed = self.preprocess_image(image_bytes)
+        if preprocessed is None:
+            return None
+
+        try:
+            # Run inference - outputs are [final_output, embedding]
+            outputs = self._session.run(None, {self._input_name: preprocessed})
+
+            # Return the embedding (second output, 576-dim)
+            embedding = outputs[1].flatten()
+
+            if len(embedding) != self.embedding_dim:
+                logger.warning(
+                    f"Unexpected embedding dimension: {len(embedding)}, "
+                    f"expected {self.embedding_dim}"
+                )
+
+            return embedding
+
+        except Exception as e:
+            logger.error(f"Error extracting embedding: {e}")
+            return None
+
+
+# =============================================================================
+# Image Data Fetcher
+# =============================================================================
+
+
+class ImageDataFetcher:
+    """
+    Fetches image data from MaxSold API and extracts embeddings.
 
     Features:
     - Async HTTP client with rate limiting
     - Automatic retries with exponential backoff
     - Parallel processing with controlled concurrency
+    - Image embedding extraction using MobileNetV3
     """
 
     def __init__(
         self,
         rate_limit: int = config.DEFAULT_RATE_LIMIT,
         max_concurrent: int = config.CONCURRENT_REQUESTS,
-        timeout: float = config.REQUEST_TIMEOUT,
+        timeout: float | None = None,
     ):
         """
-        Initialize the item data fetcher.
+        Initialize the image data fetcher.
 
         Args:
             rate_limit: Maximum requests per second
             max_concurrent: Maximum concurrent requests
             timeout: Request timeout in seconds
         """
+        http_config = config.IMAGE_HTTP_CONFIG
+
         self.rate_limit = rate_limit
         self.max_concurrent = max_concurrent
-        self.timeout = timeout
+        self.timeout = timeout or http_config["timeout"]
         self.min_interval = 1.0 / rate_limit
         self.last_request_time = 0.0
         self._lock = asyncio.Lock()
         self._client: httpx.AsyncClient | None = None
 
-    async def __aenter__(self) -> "ItemDataFetcher":
+        # Embedding extractor (lazy initialization)
+        self._extractor: ImageEmbeddingExtractor | None = None
+
+    async def __aenter__(self) -> "ImageDataFetcher":
         """Initialize async HTTP client."""
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout),
             follow_redirects=True,
             headers={
                 "User-Agent": "AuctionPricePredictor/1.0 (Research Project)",
-                "Accept": "application/json",
+                "Accept": "image/*,application/json",
             },
         )
         return self
@@ -99,9 +295,16 @@ class ItemDataFetcher:
         """Get HTTP client."""
         if self._client is None:
             raise RuntimeError(
-                "Client not initialized. Use 'async with ItemDataFetcher():'"
+                "Client not initialized. Use 'async with ImageDataFetcher():'"
             )
         return self._client
+
+    @property
+    def extractor(self) -> ImageEmbeddingExtractor:
+        """Get embedding extractor (lazy initialization)."""
+        if self._extractor is None:
+            self._extractor = ImageEmbeddingExtractor()
+        return self._extractor
 
     async def _rate_limit(self) -> None:
         """Apply rate limiting."""
@@ -121,13 +324,13 @@ class ItemDataFetcher:
     )
     async def fetch_auction_items(self, auction_id: int) -> list[dict[str, Any]]:
         """
-        Fetch all items for an auction from MaxSold API.
+        Fetch all items with image URLs for an auction.
 
         Args:
             auction_id: Auction ID to fetch items for
 
         Returns:
-            List of item dictionaries
+            List of item dictionaries with image information
         """
         await self._rate_limit()
 
@@ -148,20 +351,15 @@ class ItemDataFetcher:
             items = []
 
             if isinstance(data, dict):
-                # Response has auction metadata and items
                 auction_data = data.get("auction", {})
                 items_data = auction_data.get("items", [])
 
-                # Handle different item structures
                 if isinstance(items_data, dict):
-                    # Items are structured as {0: item_data, 1: item_data, ...}
                     items = list(items_data.values())
                 elif isinstance(items_data, list):
-                    # Items are already a list
                     items = items_data
 
             elif isinstance(data, list):
-                # Response is just a list of items
                 items = data
 
             logger.info(f"Retrieved {len(items)} items for auction {auction_id}")
@@ -176,90 +374,170 @@ class ItemDataFetcher:
             logger.error(f"Error fetching auction {auction_id}: {e}")
             raise
 
-    def process_item_data(
-        self, item: dict[str, Any], auction_id: int
-    ) -> dict[str, Any]:
+    @retry(
+        stop=stop_after_attempt(config.MAX_RETRIES),
+        wait=wait_exponential(multiplier=1, min=config.RETRY_DELAY, max=10),
+        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+    )
+    async def download_image(self, image_url: str) -> bytes | None:
         """
-        Process raw item data and extract configured fields.
+        Download image from URL.
 
         Args:
-            item: Raw item data from API
+            image_url: URL of the image
+
+        Returns:
+            Image bytes or None if failed
+        """
+        await self._rate_limit()
+
+        try:
+            response = await self.client.get(image_url)
+            response.raise_for_status()
+            return response.content
+
+        except Exception as e:
+            logger.debug(f"Failed to download image {image_url}: {e}")
+            return None
+
+    def extract_image_records(
+        self, item: dict[str, Any], auction_id: int
+    ) -> list[dict[str, Any]]:
+        """
+        Extract image records from item data.
+
+        Args:
+            item: Item data from API
             auction_id: Parent auction ID
 
         Returns:
-            Dictionary with extracted item fields
+            List of image record dictionaries
         """
-        result = {}
-
-        # Extract configured item fields
-        for field in config.ITEM_FIELDS:
-            if field == "auction_id":
-                result[field] = auction_id
-            else:
-                result[field] = item.get(field)
-
-        # Count number of images
+        records = []
+        item_id = item.get("id")
         images = item.get("images", [])
+
         if isinstance(images, list):
-            result["number_of_images"] = len(images)
-        elif isinstance(images, int):
-            result["number_of_images"] = images
-        else:
-            result["number_of_images"] = 0
+            for idx, img in enumerate(images):
+                if isinstance(img, dict):
+                    # Image is an object with url property
+                    image_url = img.get("url") or img.get("src")
+                elif isinstance(img, str):
+                    # Image is a direct URL string
+                    image_url = img
+                else:
+                    continue
 
-        return result
+                if image_url:
+                    records.append(
+                        {
+                            "auction_id": auction_id,
+                            "item_id": item_id,
+                            "image_index": idx,
+                            "image_url": image_url,
+                        }
+                    )
 
-    async def fetch_and_process_auction(
-        self, auction_id: int
-    ) -> list[dict[str, Any]] | None:
+        return records
+
+    async def process_image(
+        self, record: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """
-        Fetch and process all items for a single auction.
+        Download and process a single image.
 
         Args:
-            auction_id: Auction ID to fetch
+            record: Image record with URL
 
         Returns:
-            List of processed item data or None if failed
+            Record with embedding or None if failed
         """
-        try:
-            items = await self.fetch_auction_items(auction_id)
-            processed_items = [
-                self.process_item_data(item, auction_id) for item in items
-            ]
-            return processed_items
-        except Exception as e:
-            logger.error(f"Failed to fetch items for auction {auction_id}: {e}")
+        image_url = record.get("image_url")
+        if not image_url:
             return None
 
-    async def fetch_multiple_auctions_streaming(
-        self,
-        auction_ids: list[int],
-        progress_callback=None,
-    ):
+        try:
+            # Download image
+            image_bytes = await self.download_image(image_url)
+            if image_bytes is None:
+                return None
+
+            # Extract embedding
+            embedding = self.extractor.extract_embedding(image_bytes)
+            if embedding is None:
+                return None
+
+            # Return record with embedding
+            return {
+                "auction_id": record["auction_id"],
+                "item_id": record["item_id"],
+                "image_index": record["image_index"],
+                "image_url": image_url,
+                "embedding": embedding.tolist(),
+            }
+
+        except Exception as e:
+            logger.debug(f"Error processing image {image_url}: {e}")
+            return None
+
+    async def process_auction_images(
+        self, auction_id: int
+    ) -> list[dict[str, Any]]:
         """
-        Fetch items for multiple auctions with streaming (one at a time) to minimize memory.
+        Process all images for an auction.
 
         Args:
-            auction_ids: List of auction IDs to fetch
-            progress_callback: Optional callback function for progress updates
+            auction_id: Auction ID
 
-        Yields:
-            Tuple of (auction_id, list of items) for each successfully fetched auction
+        Returns:
+            List of processed image records with embeddings
         """
-        for auction_id in auction_ids:
-            try:
-                result = await self.fetch_and_process_auction(auction_id)
-                if progress_callback:
-                    progress_callback(auction_id, result is not None)
+        try:
+            # Fetch items for auction
+            items = await self.fetch_auction_items(auction_id)
 
-                if result is not None:
-                    logger.info(f"Fetched {len(result)} items for auction {auction_id}")
-                    yield auction_id, result
+            # Extract image records from all items
+            all_records = []
+            for item in items:
+                records = self.extract_image_records(item, auction_id)
+                all_records.extend(records)
 
-            except Exception as e:
-                logger.error(f"Exception for auction {auction_id}: {e}")
-                if progress_callback:
-                    progress_callback(auction_id, False)
+            if not all_records:
+                logger.debug(f"No images found for auction {auction_id}")
+                return []
+
+            logger.info(
+                f"Processing {len(all_records)} images for auction {auction_id}"
+            )
+
+            # Process images with concurrency control
+            semaphore = asyncio.Semaphore(self.max_concurrent)
+
+            async def process_with_semaphore(record):
+                async with semaphore:
+                    return await self.process_image(record)
+
+            tasks = [process_with_semaphore(r) for r in all_records]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Filter out failures
+            processed = []
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.debug(f"Image processing exception: {result}")
+                elif result is not None:
+                    processed.append(result)
+
+            logger.info(
+                f"Successfully processed {len(processed)}/{len(all_records)} "
+                f"images for auction {auction_id}"
+            )
+
+            return processed
+
+        except Exception as e:
+            logger.error(f"Failed to process auction {auction_id}: {e}")
+            return []
 
     async def fetch_multiple_auctions(
         self,
@@ -267,41 +545,35 @@ class ItemDataFetcher:
         progress_callback=None,
     ) -> list[dict[str, Any]]:
         """
-        Fetch items for multiple auctions with controlled concurrency.
+        Process images for multiple auctions.
 
         Args:
-            auction_ids: List of auction IDs to fetch
-            progress_callback: Optional callback function for progress updates
+            auction_ids: List of auction IDs
+            progress_callback: Optional callback for progress updates
 
         Returns:
-            Flattened list of all items from all auctions
+            Flattened list of all processed image records
         """
-        semaphore = asyncio.Semaphore(self.max_concurrent)
+        all_records = []
 
-        async def fetch_with_semaphore(auction_id: int) -> list[dict[str, Any]] | None:
-            async with semaphore:
-                result = await self.fetch_and_process_auction(auction_id)
+        for auction_id in auction_ids:
+            try:
+                records = await self.process_auction_images(auction_id)
+                all_records.extend(records)
+
                 if progress_callback:
-                    progress_callback(auction_id, result is not None)
-                return result
+                    progress_callback(auction_id, len(records) > 0)
 
-        tasks = [fetch_with_semaphore(aid) for aid in auction_ids]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Flatten results and filter out None and exceptions
-        all_items = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"Exception for auction {auction_ids[i]}: {result}")
-            elif result is not None:
-                all_items.extend(result)
+            except Exception as e:
+                logger.error(f"Exception for auction {auction_id}: {e}")
+                if progress_callback:
+                    progress_callback(auction_id, False)
 
         logger.info(
-            f"Successfully fetched {len(all_items)} items from "
-            f"{len(auction_ids)} auctions"
+            f"Processed {len(all_records)} images from {len(auction_ids)} auctions"
         )
 
-        return all_items
+        return all_records
 
 
 # =============================================================================
@@ -309,53 +581,45 @@ class ItemDataFetcher:
 # =============================================================================
 
 
-def transform_item_data(items: list[dict[str, Any]]) -> pd.DataFrame:
+def transform_image_data(records: list[dict[str, Any]]) -> pd.DataFrame:
     """
-    Transform item data: rename fields and add 'item_' prefix to column names.
-
-    Exception: auction_id does not get the prefix and remains as-is.
+    Transform image records to DataFrame format.
 
     Args:
-        items: List of item dictionaries
+        records: List of image records with embeddings
 
     Returns:
-        DataFrame with transformed column names (all have item_ prefix except auction_id)
+        DataFrame with image data and embeddings
     """
-    if not items:
-        logger.warning("No items to transform")
+    if not records:
+        logger.warning("No image records to transform")
         return pd.DataFrame()
 
-    df = pd.DataFrame(items)
+    df = pd.DataFrame(records)
 
-    # Rename fields according to mapping
-    rename_map = {}
-    for old_name in df.columns:
-        new_name = config.get_renamed_item_field_name(old_name)
-        if new_name != old_name:
-            rename_map[old_name] = new_name
+    # Rename columns with prefix
+    column_rename = {
+        "auction_id": "auction_id",  # Keep as-is
+        "item_id": "item_id",  # Keep as-is
+        "image_index": "image_index",
+        "image_url": "image_url",
+        "embedding": "image_embedding",
+    }
 
-    if rename_map:
-        df = df.rename(columns=rename_map)
-        logger.debug(f"Renamed columns: {rename_map}")
+    df = df.rename(columns=column_rename)
 
-    # Add item_ prefix to all columns
-    prefix_map = {col: config.get_prefixed_item_field_name(col) for col in df.columns}
-    df = df.rename(columns=prefix_map)
-    logger.debug(f"Added 'item_' prefix to columns: {list(df.columns)}")
-
+    logger.info(f"Transformed {len(df)} image records")
     return df
 
 
 def append_to_parquet_efficient(df_new: pd.DataFrame, output_file: Path) -> int:
     """
-    Append DataFrame to parquet file efficiently using pyarrow.
-    
-    This avoids loading the entire existing file into memory.
-    
+    Append DataFrame to parquet file efficiently.
+
     Args:
         df_new: New data to append
         output_file: Path to parquet file
-        
+
     Returns:
         Total number of rows after append
     """
@@ -363,28 +627,20 @@ def append_to_parquet_efficient(df_new: pd.DataFrame, output_file: Path) -> int:
     import pyarrow.parquet as pq
 
     if output_file.exists():
-        # Read existing parquet file metadata to get row count
         existing_table = pq.read_table(output_file)
-        existing_count = len(existing_table)
-
-        # Convert new df to arrow table
         new_table = pa.Table.from_pandas(df_new, preserve_index=False)
-
-        # Write both tables to parquet
         combined_table = pa.concat_tables([existing_table, new_table])
         pq.write_table(combined_table, output_file)
 
         total_count = len(combined_table)
         logger.info(f"Appended {len(df_new)} rows (total: {total_count})")
 
-        # Clean up
         del existing_table
         del new_table
         del combined_table
 
         return total_count
     else:
-        # First write
         df_new.to_parquet(output_file, index=False)
         logger.info(f"Created {output_file} with {len(df_new)} records")
         return len(df_new)
@@ -398,7 +654,7 @@ def append_to_parquet_efficient(df_new: pd.DataFrame, output_file: Path) -> int:
 class ProgressTracker:
     """Tracks scraping progress for resumption."""
 
-    def __init__(self, progress_file: Path = config.ITEM_PROGRESS_FILE):
+    def __init__(self, progress_file: Path = config.IMAGE_PROGRESS_FILE):
         """
         Initialize progress tracker.
 
@@ -470,7 +726,7 @@ def load_auction_ids_from_hf(limit: int | None = None) -> list[int]:
     Load auction IDs from Hugging Face dataset.
 
     Args:
-        limit: Optional limit on number of auction IDs to load
+        limit: Optional limit on number of auction IDs
 
     Returns:
         List of auction IDs
@@ -480,17 +736,11 @@ def load_auction_ids_from_hf(limit: int | None = None) -> list[int]:
 
         logger.info(f"Loading auction IDs from Hugging Face: {config.HF_DATASET_REPO}")
 
-        # Load dataset from Hugging Face
         dataset = load_dataset(config.HF_DATASET_REPO, split="train")
 
-        # Extract auction IDs
         id_column = config.HF_AUCTION_ID_COLUMN
         if id_column not in dataset.column_names:
-            logger.error(
-                f"Column '{id_column}' not found in dataset. "
-                f"Available columns: {dataset.column_names}"
-            )
-            # Try alternative column names
+            logger.error(f"Column '{id_column}' not found in dataset")
             possible_columns = ["auction_id", "amAuctionId", "id"]
             for col in possible_columns:
                 if col in dataset.column_names:
@@ -498,19 +748,13 @@ def load_auction_ids_from_hf(limit: int | None = None) -> list[int]:
                     id_column = col
                     break
             else:
-                raise ValueError("Could not find auction ID column in dataset")
+                raise ValueError("Could not find auction ID column")
 
-        auction_ids = dataset[id_column]
-
-        # Convert to list and ensure integers
-        auction_ids = [int(aid) for aid in auction_ids]
-
-        # Remove duplicates and sort
+        auction_ids = [int(aid) for aid in dataset[id_column]]
         auction_ids = sorted(set(auction_ids))
 
-        logger.info(f"Loaded {len(auction_ids)} unique auction IDs from Hugging Face")
+        logger.info(f"Loaded {len(auction_ids)} unique auction IDs")
 
-        # Apply limit if specified
         if limit:
             auction_ids = auction_ids[:limit]
             logger.info(f"Limited to {limit} auction IDs")
@@ -518,12 +762,10 @@ def load_auction_ids_from_hf(limit: int | None = None) -> list[int]:
         return auction_ids
 
     except ImportError:
-        logger.error(
-            "datasets library not installed. Install with: pip install datasets"
-        )
+        logger.error("datasets library not installed")
         raise
     except Exception as e:
-        logger.error(f"Failed to load auction IDs from Hugging Face: {e}")
+        logger.error(f"Failed to load auction IDs: {e}")
         raise
 
 
@@ -532,47 +774,46 @@ def load_auction_ids_from_hf(limit: int | None = None) -> list[int]:
 # =============================================================================
 
 
-async def scrape_items(
+async def scrape_images(
     auction_ids: list[int] | None = None,
     limit: int | None = None,
     use_progress_tracking: bool = True,
     max_workers: int = config.DEFAULT_MAX_WORKERS,
     rate_limit: int = config.DEFAULT_RATE_LIMIT,
     output_file: Path | None = None,
-    batch_size: int = 100,  # Process auctions in batches to reduce memory
+    batch_size: int = 50,
 ) -> pd.DataFrame:
     """
-    Scrape item data from MaxSold API with batch processing for memory efficiency.
+    Scrape image embeddings from MaxSold API.
 
     Args:
-        auction_ids: List of auction IDs to scrape (if None, loads from Hugging Face)
+        auction_ids: List of auction IDs to scrape (if None, loads from HF)
         limit: Maximum number of auctions to scrape
         use_progress_tracking: Whether to track and resume progress
         max_workers: Maximum parallel workers
         rate_limit: Maximum requests per second
-        output_file: Output file path (if None, uses default from config)
-        batch_size: Number of auctions to process per batch (default: 100)
+        output_file: Output file path
+        batch_size: Auctions per batch for memory efficiency
 
     Returns:
-        DataFrame with scraped item data
+        DataFrame with image embeddings
     """
     # Load auction IDs if not provided
     if auction_ids is None:
         logger.info("Loading auction IDs from Hugging Face")
         auction_ids = load_auction_ids_from_hf(limit=limit)
     else:
-        # Apply limit if specified
         if limit:
             auction_ids = auction_ids[:limit]
             logger.info(f"Limited to {limit} auctions")
 
-    # Filter out completed auctions if tracking progress
+    # Filter out completed auctions
     if use_progress_tracking:
         tracker = ProgressTracker()
         original_count = len(auction_ids)
         auction_ids = tracker.filter_pending(auction_ids)
         logger.info(
-            f"After filtering completed: {len(auction_ids)} pending "
+            f"After filtering: {len(auction_ids)} pending "
             f"({original_count - len(auction_ids)} already completed)"
         )
     else:
@@ -580,19 +821,20 @@ async def scrape_items(
 
     if not auction_ids:
         logger.warning("No auctions to scrape")
-        # Return existing data if available
         if output_file is None:
-            output_file = config.ITEM_PROCESSED_OUTPUT_DIR / config.ITEM_DATA_FILENAME
+            output_file = (
+                config.IMAGE_PROCESSED_OUTPUT_DIR / config.IMAGE_DATA_FILENAME
+            )
         if output_file.exists():
             return pd.read_parquet(output_file)
         return pd.DataFrame()
 
     # Setup output file
     if output_file is None:
-        output_file = config.ITEM_PROCESSED_OUTPUT_DIR / config.ITEM_DATA_FILENAME
+        output_file = config.IMAGE_PROCESSED_OUTPUT_DIR / config.IMAGE_DATA_FILENAME
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Setup progress callback
+    # Progress callback
     def progress_callback(auction_id: int, success: bool) -> None:
         if tracker:
             if success:
@@ -601,65 +843,47 @@ async def scrape_items(
                 tracker.mark_failed(auction_id)
             tracker.save()
 
-    # Process auctions in concurrent chunks with periodic writes to balance speed and memory
+    # Process in batches
     logger.info(
-        f"Starting to scrape items from {len(auction_ids)} auctions "
-        f"(max {max_workers} concurrent, write every {batch_size} auctions)..."
+        f"Starting to scrape images from {len(auction_ids)} auctions "
+        f"(batch size: {batch_size})..."
     )
 
-    total_items_scraped = 0
+    total_images = 0
     auctions_processed = 0
-    accumulated_items = []
 
-    # Process in chunks
     for chunk_start in range(0, len(auction_ids), batch_size):
         chunk_ids = auction_ids[chunk_start : chunk_start + batch_size]
         chunk_num = chunk_start // batch_size + 1
         total_chunks = (len(auction_ids) + batch_size - 1) // batch_size
 
         logger.info(
-            f"Processing chunk {chunk_num}/{total_chunks} with {len(chunk_ids)} auctions "
-            f"(progress: {auctions_processed}/{len(auction_ids)})"
+            f"Processing chunk {chunk_num}/{total_chunks} "
+            f"({len(chunk_ids)} auctions)"
         )
 
-        # Fetch items for this chunk with concurrency
-        async with ItemDataFetcher(
+        async with ImageDataFetcher(
             rate_limit=rate_limit,
             max_concurrent=max_workers,
         ) as fetcher:
-            chunk_items = await fetcher.fetch_multiple_auctions(
+            chunk_records = await fetcher.fetch_multiple_auctions(
                 chunk_ids,
                 progress_callback=progress_callback if use_progress_tracking else None,
             )
 
-        # Add to accumulated items
-        accumulated_items.extend(chunk_items)
         auctions_processed += len(chunk_ids)
 
-        logger.info(
-            f"Chunk {chunk_num} fetched {len(chunk_items)} items. "
-            f"Accumulated: {len(accumulated_items)} items"
-        )
-
-        # Write accumulated items to disk and clear memory
-        if accumulated_items:
-            df_batch = transform_item_data(accumulated_items)
+        if chunk_records:
+            df_batch = transform_image_data(chunk_records)
 
             if not df_batch.empty:
-                total_items_scraped = append_to_parquet_efficient(df_batch, output_file)
-                logger.info(
-                    f"Saved chunk {chunk_num}. Total in file: {total_items_scraped:,} items"
-                )
+                total_images = append_to_parquet_efficient(df_batch, output_file)
+                logger.info(f"Saved chunk {chunk_num}. Total: {total_images:,} images")
 
-            # Clear memory
             del df_batch
-            del accumulated_items
-            del chunk_items
-            accumulated_items = []  # Reset for next chunk
+            del chunk_records
 
-        logger.info(
-            f"Progress: {auctions_processed}/{len(auction_ids)} auctions complete"
-        )
+        logger.info(f"Progress: {auctions_processed}/{len(auction_ids)} auctions")
 
     # Load final result
     if output_file.exists():
@@ -682,11 +906,11 @@ async def upload_to_huggingface(
     private: bool = False,
 ) -> None:
     """
-    Upload scraped item data to Hugging Face Datasets.
+    Upload image embeddings to Hugging Face Datasets.
 
     Args:
-        data_file: Path to parquet file (uses default if None)
-        repo_id: HuggingFace repository ID (uses default if None)
+        data_file: Path to parquet file
+        repo_id: HuggingFace repository ID
         private: Whether to make the dataset private
     """
     try:
@@ -696,30 +920,26 @@ async def upload_to_huggingface(
         from src.config import settings
     except ImportError as e:
         logger.error(f"Required packages not installed: {e}")
-        logger.error("Install with: pip install datasets huggingface-hub")
         return
 
     # Setup paths
     if data_file is None:
-        data_file = config.ITEM_PROCESSED_OUTPUT_DIR / config.ITEM_DATA_FILENAME
+        data_file = config.IMAGE_PROCESSED_OUTPUT_DIR / config.IMAGE_DATA_FILENAME
 
     if not data_file.exists():
         logger.error(f"Data file not found: {data_file}")
         return
 
-    # Setup repo - use item dataset repo if available
+    # Setup repo
     if repo_id is None:
-        # Try to use a different repo for item data
         repo_id = settings.huggingface.dataset_id
         if not repo_id:
             logger.error("Hugging Face repository ID not configured")
-            logger.error("Set HF_DATASET_REPO in environment or .env file")
             return
 
     # Validate token
     if not settings.huggingface.token:
         logger.error("Hugging Face token not found")
-        logger.error("Set HF_TOKEN in environment or .env file")
         return
 
     logger.info(f"Uploading {data_file} to {repo_id}")
@@ -734,12 +954,14 @@ async def upload_to_huggingface(
 
         # Create metadata
         metadata = {
-            "name": config.HF_ITEM_DATASET_NAME,
-            "description": config.HF_ITEM_DATASET_DESCRIPTION,
-            "license": config.HF_ITEM_DATASET_LICENSE,
-            "tags": config.HF_ITEM_DATASET_TAGS,
+            "name": config.HF_IMAGE_DATASET_NAME,
+            "description": config.HF_IMAGE_DATASET_DESCRIPTION,
+            "license": config.HF_IMAGE_DATASET_LICENSE,
+            "tags": config.HF_IMAGE_DATASET_TAGS,
             "num_records": len(df),
             "columns": list(df.columns),
+            "embedding_dim": config.IMAGE_MODEL_CONFIG["embedding_dim"],
+            "model": "MobileNetV3-small",
             "created_at": datetime.utcnow().isoformat(),
         }
 
@@ -757,7 +979,7 @@ async def upload_to_huggingface(
             token=settings.huggingface.token,
         )
 
-        # Upload metadata file
+        # Upload metadata
         api = HfApi()
         api.upload_file(
             path_or_fileobj=str(metadata_file),
@@ -781,8 +1003,10 @@ async def upload_to_huggingface(
 
 
 def main() -> None:
-    """Command-line interface for item scraper."""
-    parser = argparse.ArgumentParser(description="Scrape item data from MaxSold API")
+    """Command-line interface for image scraper."""
+    parser = argparse.ArgumentParser(
+        description="Scrape image embeddings from MaxSold API"
+    )
     parser.add_argument(
         "--auction-ids",
         type=int,
@@ -814,8 +1038,8 @@ def main() -> None:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=100,
-        help="Auctions per batch for memory efficiency (default: 100)",
+        default=50,
+        help="Auctions per batch (default: 50)",
     )
     parser.add_argument(
         "--output",
@@ -842,14 +1066,14 @@ def main() -> None:
 
     # Ensure directories exist
     config.ensure_directories()
-    config.ITEM_RAW_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    config.ITEM_PROCESSED_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    config.IMAGE_RAW_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    config.IMAGE_PROCESSED_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Run scraper
-    logger.info("Starting item data scraper...")
+    logger.info("Starting image data scraper...")
 
     df = asyncio.run(
-        scrape_items(
+        scrape_images(
             auction_ids=args.auction_ids,
             limit=args.limit,
             use_progress_tracking=not args.no_progress,
@@ -867,8 +1091,9 @@ def main() -> None:
     logger.info(f"Total records: {len(df)}")
     if not df.empty:
         logger.info(f"Columns: {', '.join(df.columns)}")
-        logger.info("\nFirst few records:")
-        print(df.head())
+        if "image_embedding" in df.columns:
+            embedding_dim = len(df["image_embedding"].iloc[0])
+            logger.info(f"Embedding dimension: {embedding_dim}")
 
     # Upload to Hugging Face if requested
     if args.upload_hf:

@@ -35,6 +35,7 @@ import onnx
 import onnxruntime as ort
 import pandas as pd
 from loguru import logger
+from onnx import helper as onnx_helper
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -107,10 +108,8 @@ class ImageEmbeddingExtractor:
         model = onnx.load(str(self.model_path))
 
         # Add the flatten output as an additional output (576-dim embedding)
-        from onnx import helper
-
         flatten_output_name = "/Flatten_output_0"
-        output_node = helper.make_tensor_value_info(
+        output_node = onnx_helper.make_tensor_value_info(
             flatten_output_name, onnx.TensorProto.FLOAT, [1, self.embedding_dim]
         )
         model.graph.output.append(output_node)

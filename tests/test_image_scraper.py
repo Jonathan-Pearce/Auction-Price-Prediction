@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.data import scraper_config as config
 from src.data.image_scraper import (
     ImageDataFetcher,
     ImageEmbeddingExtractor,
@@ -364,8 +365,6 @@ async def test_fetch_auction_items_mock(mock_auction_response):
 
 def test_embedding_dimension_matches_config():
     """Test that embedding dimension matches configuration."""
-    from src.data import scraper_config as config
-
     extractor = ImageEmbeddingExtractor()
 
     assert extractor.embedding_dim == config.IMAGE_MODEL_CONFIG["embedding_dim"]
@@ -374,8 +373,6 @@ def test_embedding_dimension_matches_config():
 
 def test_model_input_size_matches_config():
     """Test that model input size matches configuration."""
-    from src.data import scraper_config as config
-
     extractor = ImageEmbeddingExtractor()
 
     assert extractor.target_size[0] == config.IMAGE_PREPROCESSING_CONFIG["max_dimension"]

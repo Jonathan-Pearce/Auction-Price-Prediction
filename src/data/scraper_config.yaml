@@ -103,6 +103,19 @@ fields:
   # Prefix for item columns
   item_column_prefix: "item_"
   
+  # Bid-level fields to extract from API response
+  bid_fields:
+    - time_of_bid
+    - amount
+    - isproxy
+  
+  # Bid field name mappings (old_name: new_name)
+  bid_field_rename_map:
+    time_of_bid: time
+    isproxy: is_proxy
+  
+  # Prefix for bid columns (exception: auction_id and item_id)
+  bid_column_prefix: "bid_"
   # Prefix for enriched auction columns (except auction_id and item_id)
   enriched_auction_column_prefix: "enriched_auction_"
 
@@ -127,6 +140,9 @@ storage:
     item_raw_directory: "data/raw/items"
     item_processed_directory: "data/processed/items"
     item_data_filename: "item_data.parquet"
+    bid_raw_directory: "data/raw/bids"
+    bid_processed_directory: "data/processed/bids"
+    bid_data_filename: "bid_data.parquet"
     enriched_auction_raw_directory: "data/raw/enriched_auctions"
     enriched_auction_processed_directory: "data/processed/enriched_auctions"
     enriched_auction_data_filename: "enriched_auction_data.parquet"
@@ -136,6 +152,12 @@ storage:
   progress:
     filename: "scraper_progress.json"
     item_progress_filename: "item_scraper_progress.json"
+    bid_progress_filename: "bid_scraper_progress.json"
+  
+  # Hugging Face datasets
+  hf_datasets:
+    item_data_repo: "jpearce610/item_data"
+    item_id_column: "item_id"
     enriched_auction_progress_filename: "enriched_auction_scraper_progress.json"
 
 # =============================================================================
@@ -191,6 +213,10 @@ huggingface:
     - item_data.parquet
     - metadata.json
   
+  # Bid dataset metadata
+  bid_dataset:
+    name: "maxsold-bid-data"
+    description: "MaxSold auction bid history data with bid timing and amounts"
   # Enriched auction dataset metadata
   enriched_auction_dataset:
     name: "maxsold-enriched-auction-data"
@@ -201,6 +227,12 @@ huggingface:
       - price-prediction
       - e-commerce
       - maxsold
+      - bids
+      - bid-history
+  
+  # Bid files to upload
+  bid_upload_files:
+    - bid_data.parquet
       - enriched
       - location
   

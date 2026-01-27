@@ -74,16 +74,28 @@ class BidDataFetcher:
         self.rate_limit = rate_limit
         self.max_concurrent = max_concurrent
         self.timeout = timeout
-        self.min_interval = 1.0 / rate_limit
-        self.last_request_time = 0.0
-        self._lock = asyncio.Lock()
+        # Token bucket rate limiting (allows true concurrency)
+        self.tokens = float(rate_limit)  # Start with full bucket
+        self.max_tokens = float(rate_limit)
+        self.refill_rate = float(rate_limit)  # Tokens per second
+        self.last_refill_time = 0.0
+        self._token_lock = asyncio.Lock()  # Only for token updates, not requests
         self._client: httpx.AsyncClient | None = None
 
     async def __aenter__(self) -> "BidDataFetcher":
-        """Initialize async HTTP client."""
+        """Initialize async HTTP client with connection pooling."""
+        # Configure connection pool for better performance with concurrent requests
+        # Keep connections alive and reuse them across workers
+        limits = httpx.Limits(
+            max_connections=self.max_concurrent * 2,  # Allow some buffer
+            max_keepalive_connections=self.max_concurrent * 2,
+            keepalive_expiry=30.0,  # Keep connections alive for 30 seconds
+        )
+        
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout),
             follow_redirects=True,
+            limits=limits,
             headers={
                 "User-Agent": "AuctionPricePredictor/1.0 (Research Project)",
                 "Accept": "application/json",
@@ -106,20 +118,49 @@ class BidDataFetcher:
         return self._client
 
     async def _rate_limit(self) -> None:
-        """Apply rate limiting."""
-        async with self._lock:
-            current_time = asyncio.get_event_loop().time()
-            time_since_last = current_time - self.last_request_time
+        """Apply token bucket rate limiting to allow concurrent requests."""
+        while True:
+            async with self._token_lock:
+                current_time = asyncio.get_event_loop().time()
+                
+                # Refill tokens based on time elapsed
+                if self.last_refill_time > 0:
+                    time_elapsed = current_time - self.last_refill_time
+                    tokens_to_add = time_elapsed * self.refill_rate
+                    self.tokens = min(self.max_tokens, self.tokens + tokens_to_add)
+                
+                self.last_refill_time = current_time
+                
+                # Check if we have a token available
+                if self.tokens >= 1.0:
+                    self.tokens -= 1.0
+                    return  # Token acquired, proceed with request
+                
+                # Calculate wait time for next token
+                wait_time = (1.0 - self.tokens) / self.refill_rate
+            
+            # Wait outside the lock to allow other coroutines to run
+            await asyncio.sleep(wait_time)
 
-            if time_since_last < self.min_interval:
-                await asyncio.sleep(self.min_interval - time_since_last)
-
-            self.last_request_time = asyncio.get_event_loop().time()
+    def _should_retry(self, exception: Exception) -> bool:
+        """Determine if request should be retried based on exception type."""
+        # Retry network errors and timeouts
+        if isinstance(exception, (httpx.TimeoutException, httpx.NetworkError)):
+            return True
+        
+        # For HTTP errors, only retry 5xx server errors and 429 rate limits
+        if isinstance(exception, httpx.HTTPStatusError):
+            status_code = exception.response.status_code
+            # Retry on server errors (5xx) or rate limits (429)
+            return status_code >= 500 or status_code == 429
+        
+        return False
 
     @retry(
         stop=stop_after_attempt(config.MAX_RETRIES),
         wait=wait_exponential(multiplier=1, min=config.RETRY_DELAY, max=10),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+        retry=lambda retry_state: retry_state.outcome.failed and 
+              retry_state.args[0]._should_retry(retry_state.outcome.exception()),
     )
     async def fetch_item_bids(
         self, auction_id: int, item_id: int
@@ -321,66 +362,90 @@ def transform_bid_data(bids: list[dict[str, Any]]) -> pd.DataFrame:
 
     df = pd.DataFrame(bids)
 
-    # Rename fields according to mapping
-    rename_map = {}
+    # Build complete column mapping: rename + prefix in one operation
+    # This avoids creating an intermediate DataFrame copy
+    final_rename_map = {}
     for old_name in df.columns:
-        new_name = config.get_renamed_bid_field_name(old_name)
-        if new_name != old_name:
-            rename_map[old_name] = new_name
-
-    if rename_map:
-        df = df.rename(columns=rename_map)
-        logger.debug(f"Renamed columns: {rename_map}")
-
-    # Add bid_ prefix to all columns except auction_id and item_id
-    prefix_map = {col: config.get_prefixed_bid_field_name(col) for col in df.columns}
-    df = df.rename(columns=prefix_map)
-    logger.debug(f"Added 'bid_' prefix to columns: {list(df.columns)}")
+        # First apply field renaming (e.g., time_of_bid -> time)
+        renamed = config.get_renamed_bid_field_name(old_name)
+        # Then apply prefix (e.g., time -> bid_time, but skip auction_id/item_id)
+        final_name = config.get_prefixed_bid_field_name(renamed)
+        final_rename_map[old_name] = final_name
+    
+    # Single rename operation instead of two
+    df = df.rename(columns=final_rename_map)
+    logger.debug(f"Transformed columns: {list(final_rename_map.keys())} -> {list(df.columns)}")
 
     return df
 
 
-def append_to_parquet_efficient(df_new: pd.DataFrame, output_file: Path) -> int:
+def write_batch_parquet(df_batch: pd.DataFrame, batch_file: Path) -> int:
     """
-    Append DataFrame to parquet file efficiently using pyarrow.
-
-    This avoids loading the entire existing file into memory.
+    Write a single batch to a parquet file.
+    
+    This replaces the O(n²) append pattern with O(n) writes.
+    All batch files are merged once at the end.
 
     Args:
-        df_new: New data to append
-        output_file: Path to parquet file
+        df_batch: Batch data to write
+        batch_file: Path to batch parquet file
 
     Returns:
-        Total number of rows after append
+        Number of rows written
+    """
+    df_batch.to_parquet(batch_file, index=False)
+    logger.info(f"Wrote batch file {batch_file.name} with {len(df_batch)} records")
+    return len(df_batch)
+
+
+def merge_batch_parquets(batch_dir: Path, output_file: Path) -> int:
+    """
+    Merge all batch parquet files into final output file.
+    
+    This is done once at the end, avoiding O(n²) complexity of
+    repeated read-concat-write operations.
+
+    Args:
+        batch_dir: Directory containing batch parquet files
+        output_file: Final output parquet file
+
+    Returns:
+        Total number of rows in merged file
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
-
-    if output_file.exists():
-        # Read existing parquet file metadata to get row count
-        existing_table = pq.read_table(output_file)
-
-        # Convert new df to arrow table
-        new_table = pa.Table.from_pandas(df_new, preserve_index=False)
-
-        # Write both tables to parquet
-        combined_table = pa.concat_tables([existing_table, new_table])
-        pq.write_table(combined_table, output_file)
-
-        total_count = len(combined_table)
-        logger.info(f"Appended {len(df_new)} rows (total: {total_count})")
-
-        # Clean up
-        del existing_table
-        del new_table
-        del combined_table
-
-        return total_count
-    else:
-        # First write
-        df_new.to_parquet(output_file, index=False)
-        logger.info(f"Created {output_file} with {len(df_new)} records")
-        return len(df_new)
+    
+    # Find all batch files
+    batch_files = sorted(batch_dir.glob("batch_*.parquet"))
+    
+    if not batch_files:
+        logger.warning("No batch files found to merge")
+        return 0
+    
+    logger.info(f"Merging {len(batch_files)} batch files into {output_file}")
+    
+    # Read all batch tables
+    tables = []
+    for batch_file in batch_files:
+        table = pq.read_table(batch_file)
+        tables.append(table)
+        logger.debug(f"Loaded {batch_file.name}: {len(table)} rows")
+    
+    # Concatenate all tables
+    combined_table = pa.concat_tables(tables)
+    
+    # Write final file
+    pq.write_table(combined_table, output_file)
+    total_rows = len(combined_table)
+    
+    logger.info(f"Merged {len(batch_files)} batches into {output_file} ({total_rows:,} total rows)")
+    
+    # Clean up batch files
+    for batch_file in batch_files:
+        batch_file.unlink()
+        logger.debug(f"Deleted batch file {batch_file.name}")
+    
+    return total_rows
 
 
 # =============================================================================
@@ -591,10 +656,14 @@ async def scrape_bids(
             return pd.read_parquet(output_file)
         return pd.DataFrame()
 
-    # Setup output file
+    # Setup output file and batch directory
     if output_file is None:
         output_file = config.BID_PROCESSED_OUTPUT_DIR / config.BID_DATA_FILENAME
     output_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Create temporary directory for batch files
+    batch_dir = output_file.parent / ".batches"
+    batch_dir.mkdir(exist_ok=True)
 
     # Setup progress callback
     def progress_callback(auction_id: int, item_id: int, success: bool) -> None:
@@ -608,12 +677,13 @@ async def scrape_bids(
     # Process items in batches to balance speed and memory
     logger.info(
         f"Starting to scrape bids from {len(item_pairs)} items "
-        f"(max {max_workers} concurrent, write every {batch_size} items)..."
+        f"(max {max_workers} concurrent, write batch every {batch_size} items)..."
     )
 
     total_bids_scraped = 0
     items_processed = 0
     accumulated_bids = []
+    batch_files_written = []
 
     # Process in chunks
     for chunk_start in range(0, len(item_pairs), batch_size):
@@ -645,14 +715,18 @@ async def scrape_bids(
             f"Accumulated: {len(accumulated_bids)} bids"
         )
 
-        # Write accumulated bids to disk and clear memory
+        # Write accumulated bids to batch file and clear memory
         if accumulated_bids:
             df_batch = transform_bid_data(accumulated_bids)
 
             if not df_batch.empty:
-                total_bids_scraped = append_to_parquet_efficient(df_batch, output_file)
+                # Write to separate batch file (not appending)
+                batch_file = batch_dir / f"batch_{chunk_num:05d}.parquet"
+                batch_row_count = write_batch_parquet(df_batch, batch_file)
+                batch_files_written.append(batch_file)
+                total_bids_scraped += batch_row_count
                 logger.info(
-                    f"Saved chunk {chunk_num}. Total in file: {total_bids_scraped:,} bids"
+                    f"Saved batch {chunk_num}. Batch: {batch_row_count} rows, Total: {total_bids_scraped:,} bids"
                 )
 
             # Clear memory
@@ -663,8 +737,19 @@ async def scrape_bids(
 
         logger.info(f"Progress: {items_processed}/{len(item_pairs)} items complete")
 
-    # Load final result
-    if output_file.exists():
+    # Merge all batch files into final output file
+    if batch_files_written:
+        logger.info(f"Merging {len(batch_files_written)} batch files...")
+        total_rows = merge_batch_parquets(batch_dir, output_file)
+        
+        # Clean up batch directory
+        try:
+            batch_dir.rmdir()
+            logger.debug(f"Removed batch directory {batch_dir}")
+        except Exception as e:
+            logger.warning(f"Could not remove batch directory: {e}")
+        
+        # Load and return final result
         df = pd.read_parquet(output_file)
         logger.info(f"Final dataset: {len(df)} records saved to {output_file}")
         return df

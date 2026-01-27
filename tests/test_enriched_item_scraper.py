@@ -117,20 +117,20 @@ def test_process_enriched_item_data(mock_enriched_data):
     assert result["amLotId"] == 7433915
     assert result["amAuctionId"] == 99941
 
-    # Check generatedDescription fields
-    assert result["generatedDescription_title"] == "Antique Wooden Chair"
-    assert result["generatedDescription_description"] == "Beautiful antique wooden chair in excellent condition"
-    assert result["generatedDescription_brand"] == "Vintage Furniture Co."
-    assert result["generatedDescription_condition"] == "Excellent"
-    assert result["generatedDescription_working"] is True
-    assert result["generatedDescription_numItems"] == 1
+    # Check extracted fields (now without generatedDescription_ prefix)
+    assert result["title"] == "Antique Wooden Chair"
+    assert result["description"] == "Beautiful antique wooden chair in excellent condition"
+    assert result["brand"] == "Vintage Furniture Co."
+    assert result["condition"] == "Excellent"
+    assert result["working"] is True
+    assert result["numItems"] == 1
 
     # Check nested JSON fields are stored as strings
-    assert isinstance(result["generatedDescription_brands"], str)
-    assert isinstance(result["generatedDescription_categories"], str)
-    assert isinstance(result["generatedDescription_items"], str)
-    assert isinstance(result["generatedDescription_attributes"], str)
-    assert isinstance(result["generatedDescription_photosTaken"], str)
+    assert isinstance(result["brands"], str)
+    assert isinstance(result["categories"], str)
+    assert isinstance(result["items"], str)
+    assert isinstance(result["attributes"], str)
+    assert isinstance(result["photosTaken"], str)
 
 
 def test_process_enriched_item_data_missing_fields():
@@ -149,9 +149,9 @@ def test_process_enriched_item_data_missing_fields():
 
     assert result["amLotId"] == 7433915
     assert result["amAuctionId"] == 99941
-    assert result["generatedDescription_title"] == "Test Item"
-    assert result["generatedDescription_description"] is None
-    assert result["generatedDescription_brands"] is None
+    assert result["title"] == "Test Item"
+    assert result["description"] is None
+    assert result["brands"] is None
 
 
 def test_process_enriched_item_data_empty_generated_description():
@@ -167,9 +167,9 @@ def test_process_enriched_item_data_empty_generated_description():
 
     assert result["amLotId"] == 7433915
     assert result["amAuctionId"] == 99941
-    # All generatedDescription fields should be None
-    assert result.get("generatedDescription_title") is None
-    assert result.get("generatedDescription_description") is None
+    # All fields should be None when generatedDescription is missing
+    assert result.get("title") is None
+    assert result.get("description") is None
 
 
 # =============================================================================
@@ -200,7 +200,7 @@ def test_transform_enriched_item_data(mock_multiple_enriched_items):
     # Check that other columns have the enriched_item_ prefix
     for col in df.columns:
         if col not in ("item_id", "auction_id"):
-            assert col.startswith("enriched_item_generatedDescription_")
+            assert col.startswith("enriched_item_")
 
     # Check data values
     assert df["item_id"].tolist() == [7433915, 7433916]
@@ -322,7 +322,7 @@ async def test_fetch_and_process_item_mock(mock_enriched_data):
         assert result is not None
         assert result["amLotId"] == 7433915
         assert result["amAuctionId"] == 99941
-        assert "generatedDescription_title" in result
+        assert "title" in result
 
 
 @pytest.mark.asyncio

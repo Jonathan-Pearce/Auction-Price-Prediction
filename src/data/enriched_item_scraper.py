@@ -7,7 +7,7 @@ Scraper for enriched item-level data from MaxSold API.
 This module implements the requirements from the issue:
 1. Scrapes enriched item data from MaxSold enriched API endpoint
 2. Loads item IDs from Hugging Face dataset (jpearce610/item_data)
-3. Extracts specified enriched item fields (amLotId, amAuctionId, generatedDescription, etc.)
+3. Extracts specified enriched item fields (amLotId, amAuctionId, title, brand, etc.)
 4. Adds 'enriched_item_' prefix to all column names (except item_id and auction_id)
 5. Uses parallel processing for faster scraping
 6. Uploads to Hugging Face
@@ -174,20 +174,20 @@ class EnrichedItemDataFetcher:
         result["amLotId"] = enriched_data.get("amLotId", item_id)
         result["amAuctionId"] = enriched_data.get("amAuctionId")
 
-        # Extract generatedDescription fields
+        # Extract fields from generatedDescription object
         generated_desc = enriched_data.get("generatedDescription", {})
         if generated_desc:
             for field in config.ENRICHED_ITEM_GENERATED_DESCRIPTION_FIELDS:
-                result[f"generatedDescription_{field}"] = generated_desc.get(field)
+                result[field] = generated_desc.get(field)
 
         # Extract nested JSON fields (stored as JSON strings)
         for field in config.ENRICHED_ITEM_JSON_FIELDS:
             value = generated_desc.get(field) if generated_desc else None
             if value is not None:
                 # Store as JSON string
-                result[f"generatedDescription_{field}"] = json.dumps(value)
+                result[field] = json.dumps(value)
             else:
-                result[f"generatedDescription_{field}"] = None
+                result[field] = None
 
         return result
 

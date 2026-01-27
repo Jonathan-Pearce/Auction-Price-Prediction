@@ -107,7 +107,6 @@ fields:
   enriched_item_fields:
     - amLotId
     - amAuctionId
-    - generatedDescription
   
   # Nested enriched item fields (stored as JSON strings)
   enriched_item_json_fields:
@@ -117,7 +116,7 @@ fields:
     - attributes
     - photosTaken
   
-  # Fields within generatedDescription
+  # Fields extracted from the generatedDescription object
   enriched_item_generated_description_fields:
     - title
     - slug

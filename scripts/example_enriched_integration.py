@@ -47,7 +47,7 @@ def combine_datasets(items_df, enriched_df):
     )
     
     print(f"\n✓ Combined dataset: {len(combined_df):,} rows")
-    print(f"✓ Items with enriched data: {combined_df['enriched_item_generatedDescription_title'].notna().sum():,}")
+    print(f"✓ Items with enriched data: {combined_df['enriched_item_title'].notna().sum():,}")
     
     return combined_df
 
@@ -61,8 +61,8 @@ def analyze_combined_data(combined_df):
     # Basic stats
     print("\nDataset Size:")
     print(f"  Total items: {len(combined_df):,}")
-    print(f"  Items with enriched data: {combined_df['enriched_item_generatedDescription_title'].notna().sum():,}")
-    print(f"  Coverage: {combined_df['enriched_item_generatedDescription_title'].notna().mean()*100:.1f}%")
+    print(f"  Items with enriched data: {combined_df['enriched_item_title'].notna().sum():,}")
+    print(f"  Coverage: {combined_df['enriched_item_title'].notna().mean()*100:.1f}%")
     
     # Enriched fields coverage
     print("\nEnriched Fields Coverage:")
@@ -73,16 +73,16 @@ def analyze_combined_data(combined_df):
     
     # Sample enriched data
     print("\nSample Enriched Items:")
-    enriched_items = combined_df[combined_df["enriched_item_generatedDescription_title"].notna()]
+    enriched_items = combined_df[combined_df["enriched_item_title"].notna()]
     if len(enriched_items) > 0:
-        sample = enriched_items[["item_id", "item_title", "enriched_item_generatedDescription_brand", 
-                                  "enriched_item_generatedDescription_condition"]].head(5)
+        sample = enriched_items[["item_id", "item_title", "enriched_item_brand", 
+                                  "enriched_item_condition"]].head(5)
         print(sample.to_string())
     
     # Brand analysis
-    if "enriched_item_generatedDescription_brand" in combined_df.columns:
+    if "enriched_item_brand" in combined_df.columns:
         print("\nTop Brands:")
-        top_brands = combined_df["enriched_item_generatedDescription_brand"].value_counts().head(10)
+        top_brands = combined_df["enriched_item_brand"].value_counts().head(10)
         for brand, count in top_brands.items():
             if pd.notna(brand):
                 print(f"  {brand}: {count:,} items")
@@ -96,29 +96,29 @@ def demonstrate_use_cases(combined_df):
     
     # Use case 1: Filter by brand
     print("\n1. Filter items by brand:")
-    if "enriched_item_generatedDescription_brand" in combined_df.columns:
-        branded_items = combined_df[combined_df["enriched_item_generatedDescription_brand"].notna()]
+    if "enriched_item_brand" in combined_df.columns:
+        branded_items = combined_df[combined_df["enriched_item_brand"].notna()]
         print(f"   Items with known brands: {len(branded_items):,}")
-    
+
     # Use case 2: Filter by condition
     print("\n2. Items in excellent condition:")
-    if "enriched_item_generatedDescription_condition" in combined_df.columns:
+    if "enriched_item_condition" in combined_df.columns:
         excellent = combined_df[
-            combined_df["enriched_item_generatedDescription_condition"].str.contains("Excellent", na=False)
+            combined_df["enriched_item_condition"].str.contains("Excellent", na=False)
         ]
         print(f"   Items in excellent condition: {len(excellent):,}")
-    
+
     # Use case 3: Working status analysis
     print("\n3. Working status analysis:")
-    if "enriched_item_generatedDescription_working" in combined_df.columns:
-        working_items = combined_df["enriched_item_generatedDescription_working"].value_counts()
+    if "enriched_item_working" in combined_df.columns:
+        working_items = combined_df["enriched_item_working"].value_counts()
         for status, count in working_items.items():
             print(f"   {status}: {count:,} items")
-    
+
     # Use case 4: Price by condition
     print("\n4. Average price by condition:")
-    if "enriched_item_generatedDescription_condition" in combined_df.columns and "item_winning_price" in combined_df.columns:
-        avg_price = combined_df.groupby("enriched_item_generatedDescription_condition")["item_winning_price"].mean()
+    if "enriched_item_condition" in combined_df.columns and "item_winning_price" in combined_df.columns:
+        avg_price = combined_df.groupby("enriched_item_condition")["item_winning_price"].mean()
         for condition, price in avg_price.head(5).items():
             if pd.notna(condition):
                 print(f"   {condition}: ${price:.2f}")

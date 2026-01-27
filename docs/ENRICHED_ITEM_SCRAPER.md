@@ -34,8 +34,8 @@ Item IDs are loaded from the existing Hugging Face dataset:
 - `amLotId` → renamed to `item_id`
 - `amAuctionId` → renamed to `auction_id`
 
-### Generated Description Fields
-From the `generatedDescription` object:
+### Fields from generatedDescription Object
+Extracted directly (without intermediate prefix):
 - `title`: Item title
 - `slug`: URL-friendly slug
 - `description`: Item description
@@ -61,8 +61,9 @@ All columns (except `item_id` and `auction_id`) receive the `enriched_item_` pre
 
 - `item_id` → `item_id` (no prefix)
 - `auction_id` → `auction_id` (no prefix)
-- `generatedDescription_title` → `enriched_item_generatedDescription_title`
-- `generatedDescription_brand` → `enriched_item_generatedDescription_brand`
+- `title` → `enriched_item_title`
+- `brand` → `enriched_item_brand`
+- `brands` → `enriched_item_brands`
 - etc.
 
 ## Usage
@@ -153,17 +154,17 @@ await upload_to_huggingface(
 The output parquet file contains:
 - `item_id`: Integer
 - `auction_id`: Integer
-- `enriched_item_generatedDescription_title`: String
-- `enriched_item_generatedDescription_description`: String
-- `enriched_item_generatedDescription_brand`: String
-- `enriched_item_generatedDescription_condition`: String
-- `enriched_item_generatedDescription_working`: Boolean
-- `enriched_item_generatedDescription_numItems`: Integer
-- `enriched_item_generatedDescription_brands`: JSON String
-- `enriched_item_generatedDescription_categories`: JSON String
-- `enriched_item_generatedDescription_items`: JSON String
-- `enriched_item_generatedDescription_attributes`: JSON String
-- `enriched_item_generatedDescription_photosTaken`: JSON String
+- `enriched_item_title`: String
+- `enriched_item_description`: String
+- `enriched_item_brand`: String
+- `enriched_item_condition`: String
+- `enriched_item_working`: Boolean
+- `enriched_item_numItems`: Integer
+- `enriched_item_brands`: JSON String
+- `enriched_item_categories`: JSON String
+- `enriched_item_items`: JSON String
+- `enriched_item_attributes`: JSON String
+- `enriched_item_photosTaken`: JSON String
 
 ## Memory Efficiency
 

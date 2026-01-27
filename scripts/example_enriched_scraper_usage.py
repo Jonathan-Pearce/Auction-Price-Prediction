@@ -80,7 +80,7 @@ async def example_fetcher_low_level():
         
         if item_data:
             print(f"Fetched item: {item_data.get('amLotId')}")
-            print(f"Generated description title: {item_data.get('generatedDescription_title')}")
+            print(f"Title: {item_data.get('title')}")
         
         # Fetch multiple items
         items = await fetcher.fetch_multiple_items([7433916, 7433917])

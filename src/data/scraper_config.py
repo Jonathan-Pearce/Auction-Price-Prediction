@@ -728,6 +728,8 @@ HF_ENRICHED_ITEM_DATASET_TAGS = get_config_value(
 )
 HF_ENRICHED_ITEM_UPLOAD_FILES = get_config_value(
     "huggingface", "enriched_item_upload_files", default=[]
+)
+
 # Bid Dataset Configuration
 HF_BID_DATASET_NAME = get_config_value(
     "huggingface", "bid_dataset", "name", default="maxsold-bid-data"

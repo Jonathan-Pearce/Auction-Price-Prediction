@@ -15,7 +15,7 @@ All requirements from GitHub issue "Data Scraping - Enriched Item Data" have bee
 - ✅ API Integration: Uses `https://api.maxsold.com/listings/am/{item_id}/enriched`
 - ✅ Data Source: Loads item IDs from Hugging Face (jpearce610/item_data)
 - ✅ Configuration: All constants in scraper_config.yaml
-- ✅ Field Extraction: Extracts all required fields (amLotId, amAuctionId, generatedDescription)
+- ✅ Field Extraction: Extracts all required fields (amLotId, amAuctionId, title, brand, etc.)
 - ✅ Nested JSON: Stores brands, categories, items, attributes, photosTaken as JSON strings
 - ✅ Column Naming: All fields get enriched_item_ prefix (except item_id, auction_id)
 - ✅ Memory Efficiency: Batch processing (100 items), PyArrow appending, memory cleanup
@@ -70,7 +70,7 @@ Hugging Face Dataset (jpearce610/item_data)
 
 4. **Field Extraction**
    - Basic: amLotId → item_id, amAuctionId → auction_id
-   - Generated Description: 10 fields (title, description, brand, condition, etc.)
+   - Fields from generatedDescription object: 10 fields (title, description, brand, condition, etc.)
    - Nested JSON: 5 fields stored as JSON strings (brands, categories, items, attributes, photosTaken)
 
 5. **Column Naming**

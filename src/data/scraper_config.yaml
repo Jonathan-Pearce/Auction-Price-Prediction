@@ -16,6 +16,7 @@ api:
   endpoints:
     auction_items: "/auctions/items"
     enriched_item: "/listings/am/{item_id}/enriched"
+    enriched_auction: "/sales/am/{auction_id}"
   
   # API parameters
   parameters:
@@ -83,6 +84,19 @@ fields:
     id: id
     auction_id: auction_id
   
+  # Enriched auction fields to extract from API response
+  enriched_auction_fields:
+    - amAuctionId
+    - type
+    - category
+    - displayRegion
+    - approxLocation
+  
+  # Enriched auction field name mappings (old_name: new_name)
+  enriched_auction_field_rename_map:
+    amAuctionId: auction_id
+    amLotId: item_id
+  
   # Prefix to add to all column names
   column_prefix: "auction_"
   
@@ -123,6 +137,21 @@ fields:
   
   # Prefix for enriched item columns
   enriched_item_column_prefix: "enriched_item_"
+  # Bid-level fields to extract from API response
+  bid_fields:
+    - time_of_bid
+    - amount
+    - isproxy
+  
+  # Bid field name mappings (old_name: new_name)
+  bid_field_rename_map:
+    time_of_bid: time
+    isproxy: is_proxy
+  
+  # Prefix for bid columns (exception: auction_id and item_id)
+  bid_column_prefix: "bid_"
+  # Prefix for enriched auction columns (except auction_id and item_id)
+  enriched_auction_column_prefix: "enriched_auction_"
 
 # =============================================================================
 # Data Storage Configuration
@@ -151,6 +180,12 @@ storage:
     enriched_item_raw_directory: "data/raw/enriched_items"
     enriched_item_processed_directory: "data/processed/enriched_items"
     enriched_item_data_filename: "enriched_item_data.parquet"
+    bid_raw_directory: "data/raw/bids"
+    bid_processed_directory: "data/processed/bids"
+    bid_data_filename: "bid_data.parquet"
+    enriched_auction_raw_directory: "data/raw/enriched_auctions"
+    enriched_auction_processed_directory: "data/processed/enriched_auctions"
+    enriched_auction_data_filename: "enriched_auction_data.parquet"
     metadata_filename: "metadata.json"
   
   # Progress tracking
@@ -158,6 +193,13 @@ storage:
     filename: "scraper_progress.json"
     item_progress_filename: "item_scraper_progress.json"
     enriched_item_progress_filename: "enriched_item_scraper_progress.json"
+    bid_progress_filename: "bid_scraper_progress.json"
+  
+  # Hugging Face datasets
+  hf_datasets:
+    item_data_repo: "jpearce610/item_data"
+    item_id_column: "item_id"
+    enriched_auction_progress_filename: "enriched_auction_scraper_progress.json"
 
 # =============================================================================
 # Parallel Processing Configuration
@@ -216,6 +258,14 @@ huggingface:
   enriched_item_dataset:
     name: "maxsold-enriched-item-data"
     description: "MaxSold enriched item data with detailed item attributes, brands, categories, and metadata"
+  # Bid dataset metadata
+  bid_dataset:
+    name: "maxsold-bid-data"
+    description: "MaxSold auction bid history data with bid timing and amounts"
+  # Enriched auction dataset metadata
+  enriched_auction_dataset:
+    name: "maxsold-enriched-auction-data"
+    description: "MaxSold enriched auction data with location and category information"
     license: "cc-by-4.0"
     tags:
       - auction
@@ -228,6 +278,18 @@ huggingface:
   # Enriched item files to upload
   enriched_item_upload_files:
     - enriched_item_data.parquet
+      - bids
+      - bid-history
+  
+  # Bid files to upload
+  bid_upload_files:
+    - bid_data.parquet
+      - enriched
+      - location
+  
+  # Enriched auction files to upload
+  enriched_auction_upload_files:
+    - enriched_auction_data.parquet
     - metadata.json
 
 # =============================================================================

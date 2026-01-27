@@ -26,6 +26,8 @@ Usage:
 import argparse
 import asyncio
 import json
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -530,6 +532,79 @@ class ProgressTracker:
 # =============================================================================
 
 
+def _process_batch_worker(
+    batch_num: int,
+    chunk_pairs: list[tuple[int, int]],
+    rate_limit: int,
+    max_workers: int,
+    batch_dir: Path,
+    use_progress_tracking: bool,
+    progress_file: Path,
+) -> tuple[int, int, int]:
+    """
+    Worker function to process a single batch in a separate process.
+    
+    This function runs in its own process with its own event loop,
+    allowing true multi-core parallelism for I/O-bound operations.
+    
+    Args:
+        batch_num: Batch number for file naming
+        chunk_pairs: List of (auction_id, item_id) tuples to process
+        rate_limit: Rate limit per worker
+        max_workers: Concurrent workers per process
+        batch_dir: Directory to write batch file
+        use_progress_tracking: Whether to track progress
+        progress_file: Path to progress tracking file
+    
+    Returns:
+        Tuple of (batch_num, num_bids, num_items_processed)
+    """
+    # Each process needs its own event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        # Setup progress tracker if needed
+        tracker = ProgressTracker(progress_file) if use_progress_tracking else None
+        
+        def progress_callback(auction_id: int, item_id: int, success: bool) -> None:
+            if tracker:
+                if success:
+                    tracker.mark_completed(auction_id, item_id)
+                else:
+                    tracker.mark_failed(auction_id, item_id)
+                tracker.save()
+        
+        # Fetch bids for this chunk
+        async def fetch_chunk():
+            async with BidDataFetcher(
+                rate_limit=rate_limit,
+                max_concurrent=max_workers,
+            ) as fetcher:
+                return await fetcher.fetch_multiple_items(
+                    chunk_pairs,
+                    progress_callback=progress_callback if use_progress_tracking else None,
+                )
+        
+        chunk_bids = loop.run_until_complete(fetch_chunk())
+        
+        # Transform and write batch file
+        if chunk_bids:
+            df_batch = transform_bid_data(chunk_bids)
+            if not df_batch.empty:
+                batch_file = batch_dir / f"batch_{batch_num:05d}.parquet"
+                batch_row_count = write_batch_parquet(df_batch, batch_file)
+                logger.info(
+                    f"[Process {os.getpid()}] Batch {batch_num}: {batch_row_count} bids from {len(chunk_pairs)} items"
+                )
+                return (batch_num, batch_row_count, len(chunk_pairs))
+        
+        return (batch_num, 0, len(chunk_pairs))
+        
+    finally:
+        loop.close()
+
+
 def load_item_ids_from_hf(limit: int | None = None) -> list[tuple[int, int]]:
     """
     Load (auction_id, item_id) pairs from Hugging Face dataset.
@@ -665,77 +740,67 @@ async def scrape_bids(
     batch_dir = output_file.parent / ".batches"
     batch_dir.mkdir(exist_ok=True)
 
-    # Setup progress callback
-    def progress_callback(auction_id: int, item_id: int, success: bool) -> None:
-        if tracker:
-            if success:
-                tracker.mark_completed(auction_id, item_id)
-            else:
-                tracker.mark_failed(auction_id, item_id)
-            tracker.save()
+    # Determine number of CPU cores to use
+    # Leave 2 cores free for system tasks
+    num_cores = max(1, os.cpu_count() - 2) if os.cpu_count() else 1
+    logger.info(f"Using {num_cores} CPU cores for parallel processing")
 
-    # Process items in batches to balance speed and memory
+    # Split work into chunks
+    chunks = []
+    for chunk_start in range(0, len(item_pairs), batch_size):
+        chunk_pairs = item_pairs[chunk_start : chunk_start + batch_size]
+        chunk_num = chunk_start // batch_size + 1
+        chunks.append((chunk_num, chunk_pairs))
+    
+    total_chunks = len(chunks)
     logger.info(
         f"Starting to scrape bids from {len(item_pairs)} items "
-        f"(max {max_workers} concurrent, write batch every {batch_size} items)..."
+        f"({total_chunks} batches, {max_workers} workers per batch, "
+        f"{num_cores} parallel processes)..."
     )
 
     total_bids_scraped = 0
     items_processed = 0
-    accumulated_bids = []
     batch_files_written = []
 
-    # Process in chunks
-    for chunk_start in range(0, len(item_pairs), batch_size):
-        chunk_pairs = item_pairs[chunk_start : chunk_start + batch_size]
-        chunk_num = chunk_start // batch_size + 1
-        total_chunks = (len(item_pairs) + batch_size - 1) // batch_size
+    # Get progress file path for workers
+    progress_file = config.BID_PROGRESS_FILE if use_progress_tracking else None
 
-        logger.info(
-            f"Processing chunk {chunk_num}/{total_chunks} with {len(chunk_pairs)} items "
-            f"(progress: {items_processed}/{len(item_pairs)})"
-        )
-
-        # Fetch bids for this chunk with concurrency
-        async with BidDataFetcher(
-            rate_limit=rate_limit,
-            max_concurrent=max_workers,
-        ) as fetcher:
-            chunk_bids = await fetcher.fetch_multiple_items(
+    # Process batches in parallel across CPU cores
+    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        # Submit all batch jobs to the pool
+        future_to_batch = {}
+        for chunk_num, chunk_pairs in chunks:
+            future = executor.submit(
+                _process_batch_worker,
+                chunk_num,
                 chunk_pairs,
-                progress_callback=progress_callback if use_progress_tracking else None,
+                rate_limit,
+                max_workers,
+                batch_dir,
+                use_progress_tracking,
+                progress_file,
             )
-
-        # Add to accumulated bids
-        accumulated_bids.extend(chunk_bids)
-        items_processed += len(chunk_pairs)
-
-        logger.info(
-            f"Chunk {chunk_num} fetched {len(chunk_bids)} bids. "
-            f"Accumulated: {len(accumulated_bids)} bids"
-        )
-
-        # Write accumulated bids to batch file and clear memory
-        if accumulated_bids:
-            df_batch = transform_bid_data(accumulated_bids)
-
-            if not df_batch.empty:
-                # Write to separate batch file (not appending)
-                batch_file = batch_dir / f"batch_{chunk_num:05d}.parquet"
-                batch_row_count = write_batch_parquet(df_batch, batch_file)
-                batch_files_written.append(batch_file)
-                total_bids_scraped += batch_row_count
+            future_to_batch[future] = (chunk_num, len(chunk_pairs))
+        
+        # Process results as they complete
+        for future in as_completed(future_to_batch):
+            chunk_num, num_items = future_to_batch[future]
+            try:
+                batch_num, num_bids, items_in_batch = future.result()
+                total_bids_scraped += num_bids
+                items_processed += items_in_batch
+                
+                if num_bids > 0:
+                    batch_files_written.append(batch_dir / f"batch_{batch_num:05d}.parquet")
+                
                 logger.info(
-                    f"Saved batch {chunk_num}. Batch: {batch_row_count} rows, Total: {total_bids_scraped:,} bids"
+                    f"Completed batch {batch_num}/{total_chunks}: "
+                    f"{num_bids} bids, Progress: {items_processed}/{len(item_pairs)} items "
+                    f"(Total: {total_bids_scraped:,} bids)"
                 )
-
-            # Clear memory
-            del df_batch
-            del accumulated_bids
-            del chunk_bids
-            accumulated_bids = []  # Reset for next chunk
-
-        logger.info(f"Progress: {items_processed}/{len(item_pairs)} items complete")
+            except Exception as e:
+                logger.error(f"Batch {chunk_num} failed with error: {e}")
 
     # Merge all batch files into final output file
     if batch_files_written:

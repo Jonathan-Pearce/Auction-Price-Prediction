@@ -11,9 +11,12 @@ Transforms raw auction, item, and bid data into features for ML models:
 - Sequential features: Bid history time series
 """
 
+import re
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
+from bs4 import BeautifulSoup
 from loguru import logger
 
 from src.config import settings
@@ -22,6 +25,127 @@ from src.config import settings
 # =============================================================================
 # Tabular Features
 # =============================================================================
+
+
+def extract_pickup_windows(auction_removal_info: str) -> dict[str, Any]:
+    """
+    Extract pickup window features from auction_removal_info HTML text.
+    
+    Parses the HTML-formatted pickup information to extract:
+    - Number of pickup windows/categories
+    - Total hours of pickup availability
+    - Start hour of first pickup window
+    - End hour of last pickup window
+    - Day of week for pickup
+    - Whether pickup is split by categories
+    
+    Args:
+        auction_removal_info: HTML string containing pickup information
+        
+    Returns:
+        Dictionary with pickup window features:
+        - num_pickup_windows: int - Count of distinct pickup windows
+        - total_pickup_hours: float - Total hours across all windows
+        - first_pickup_start_hour: float - Hour of day (0-23.99) when first pickup starts
+        - last_pickup_end_hour: float - Hour of day (0-23.99) when last pickup ends
+        - pickup_day_of_week: int - Day of week (0=Monday, 6=Sunday), None if not found
+        - has_category_windows: bool - True if pickup has category-based sub-windows
+        
+    Example input patterns:
+        "Pickup: Saturday, March 14 EDT, 9AM - 12 NOON"
+        "Pickup: Friday, March 13 EDT, 4PM - 7PM"
+        "Category A: 9AM - 11AM" (with main pickup line)
+    """
+    # Default values
+    result = {
+        "num_pickup_windows": 0,
+        "total_pickup_hours": 0.0,
+        "first_pickup_start_hour": None,
+        "last_pickup_end_hour": None,
+        "pickup_day_of_week": None,
+        "has_category_windows": False,
+    }
+    
+    if not auction_removal_info or pd.isna(auction_removal_info):
+        return result
+    
+    try:
+        # Parse HTML to get clean text
+        soup = BeautifulSoup(auction_removal_info, "html.parser")
+        text = soup.get_text()
+        
+        # Extract day of week from main pickup line
+        day_pattern = r"Pickup:\s*(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
+        day_match = re.search(day_pattern, text, re.IGNORECASE)
+        if day_match:
+            days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            day_name = day_match.group(1).lower()
+            result["pickup_day_of_week"] = days.index(day_name)
+        
+        # Check for category-based windows
+        has_categories = bool(re.search(r"Cat(egory)?\s+[A-Z]:", text, re.IGNORECASE))
+        result["has_category_windows"] = has_categories
+        
+        # Extract all time ranges
+        # Patterns to match:
+        # - "9AM - 12 NOON", "4PM - 7PM", "12:00 Noon - 04:00 PM"
+        # - "9AM - 11AM" (in category lines)
+        time_ranges = []
+        
+        # Main pickup time pattern
+        main_time_pattern = r"(\d{1,2}):?(\d{2})?\s*(AM|PM|NOON|Noon)\s*-\s*(\d{1,2}):?(\d{2})?\s*(AM|PM|NOON|Noon)"
+        
+        for match in re.finditer(main_time_pattern, text, re.IGNORECASE):
+            start_hour = int(match.group(1))
+            start_min = int(match.group(2)) if match.group(2) else 0
+            start_period = match.group(3).upper()
+            end_hour = int(match.group(4))
+            end_min = int(match.group(5)) if match.group(5) else 0
+            end_period = match.group(6).upper()
+            
+            # Convert to 24-hour format
+            if "NOON" in start_period:
+                start_hour_24 = 12
+            elif start_period == "PM" and start_hour != 12:
+                start_hour_24 = start_hour + 12
+            elif start_period == "AM" and start_hour == 12:
+                start_hour_24 = 0
+            else:
+                start_hour_24 = start_hour
+                
+            if "NOON" in end_period:
+                end_hour_24 = 12
+            elif end_period == "PM" and end_hour != 12:
+                end_hour_24 = end_hour + 12
+            elif end_period == "AM" and end_hour == 12:
+                end_hour_24 = 0
+            else:
+                end_hour_24 = end_hour
+            
+            # Convert to decimal hours
+            start_decimal = start_hour_24 + start_min / 60.0
+            end_decimal = end_hour_24 + end_min / 60.0
+            
+            time_ranges.append((start_decimal, end_decimal))
+        
+        if time_ranges:
+            result["num_pickup_windows"] = len(time_ranges)
+            
+            # Calculate total hours (sum of all windows)
+            total_hours = sum(end - start for start, end in time_ranges)
+            result["total_pickup_hours"] = round(total_hours, 2)
+            
+            # First pickup start and last pickup end
+            all_starts = [start for start, _ in time_ranges]
+            all_ends = [end for _, end in time_ranges]
+            result["first_pickup_start_hour"] = round(min(all_starts), 2)
+            result["last_pickup_end_hour"] = round(max(all_ends), 2)
+        
+    except Exception as e:
+        logger.warning(f"Error parsing pickup window info: {e}")
+        # Return defaults on error
+    
+    return result
 
 
 def engineer_auction_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -35,6 +159,7 @@ def engineer_auction_features(df: pd.DataFrame) -> pd.DataFrame:
     - Season / month
     - Total number of items in auction
     - Auction duration
+    - Pickup window features (day, hours, number of windows)
 
     Args:
         df: Raw auction DataFrame
@@ -45,7 +170,20 @@ def engineer_auction_features(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Engineering auction features...")
     features = df.copy()
 
-    # TODO: Implement auction-level feature engineering
+    # Extract pickup window features if auction_removal_info column exists
+    if "auction_removal_info" in features.columns:
+        logger.info("Extracting pickup window features...")
+        pickup_features = features["auction_removal_info"].apply(extract_pickup_windows)
+        
+        # Convert list of dicts to DataFrame and join
+        pickup_df = pd.DataFrame(pickup_features.tolist())
+        features = pd.concat([features, pickup_df], axis=1)
+        
+        logger.info(
+            f"Added pickup window features: {list(pickup_df.columns)}"
+        )
+
+    # TODO: Implement additional auction-level feature engineering
     # Example features:
     # - features['auction_item_count'] = ...
     # - features['auction_day_of_week'] = ...

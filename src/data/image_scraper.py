@@ -441,26 +441,29 @@ class ImageDataFetcher:
         item_id = item.get("id")
         images = item.get("images", [])
 
-        if isinstance(images, list):
-            for idx, img in enumerate(images):
-                if isinstance(img, dict):
-                    # Image is an object with url property
-                    image_url = img.get("url") or img.get("src")
-                elif isinstance(img, str):
-                    # Image is a direct URL string
-                    image_url = img
-                else:
-                    continue
+        if isinstance(images, list) and len(images) > 0:
+            # Only process the first image from each item for speed
+            img = images[0]
+            idx = 0
+            
+            if isinstance(img, dict):
+                # Image is an object with url property
+                image_url = img.get("url") or img.get("src")
+            elif isinstance(img, str):
+                # Image is a direct URL string
+                image_url = img
+            else:
+                image_url = None
 
-                if image_url:
-                    records.append(
-                        {
-                            "auction_id": auction_id,
-                            "item_id": item_id,
-                            "image_index": idx,
-                            "image_url": image_url,
-                        }
-                    )
+            if image_url:
+                records.append(
+                    {
+                        "auction_id": auction_id,
+                        "item_id": item_id,
+                        "image_index": idx,
+                        "image_url": image_url,
+                    }
+                )
 
         return records
 

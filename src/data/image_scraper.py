@@ -24,6 +24,8 @@ Usage:
 import argparse
 import asyncio
 import json
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -119,8 +121,10 @@ class ImageEmbeddingExtractor:
         
         # Configure session options for better performance
         sess_options = ort.SessionOptions()
-        sess_options.intra_op_num_threads = 2  # Threads per operation
-        sess_options.inter_op_num_threads = 2  # Threads between operations
+        # Limit to 8 cores max for CPU efficiency
+        max_threads = min(8, os.cpu_count() or 4)
+        sess_options.intra_op_num_threads = max_threads  # Threads per operation
+        sess_options.inter_op_num_threads = max_threads  # Threads between operations
         sess_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         
@@ -617,6 +621,61 @@ class ImageDataFetcher:
         return all_records
 
 
+def write_batch_parquet(df: pd.DataFrame, output_file: Path) -> int:
+    """
+    Write DataFrame to parquet file.
+    
+    Args:
+        df: DataFrame to write
+        output_file: Path to output file
+    
+    Returns:
+        Number of rows written
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    pq.write_table(table, output_file)
+    return len(df)
+
+
+def merge_batch_parquets(batch_dir: Path, output_file: Path) -> int:
+    """
+    Merge all batch parquet files into a single file.
+    
+    Args:
+        batch_dir: Directory containing batch files
+        output_file: Path to final output file
+    
+    Returns:
+        Total number of rows in merged file
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    
+    batch_files = sorted(batch_dir.glob("batch_*.parquet"))
+    
+    if not batch_files:
+        logger.warning("No batch files found to merge")
+        return 0
+    
+    # Read and concatenate all batch files
+    tables = [pq.read_table(f) for f in batch_files]
+    combined_table = pa.concat_tables(tables)
+    
+    # Write combined table
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(combined_table, output_file)
+    
+    # Clean up batch files
+    for batch_file in batch_files:
+        batch_file.unlink()
+    
+    return len(combined_table)
+
+
 # =============================================================================
 # Data Transformation
 # =============================================================================
@@ -811,6 +870,83 @@ def load_auction_ids_from_hf(limit: int | None = None) -> list[int]:
 
 
 # =============================================================================
+# Batch Processing Worker (for multiprocessing)
+# =============================================================================
+
+
+def _process_batch_worker(
+    batch_num: int,
+    chunk_ids: list[int],
+    rate_limit: int,
+    max_workers: int,
+    batch_dir: Path,
+    use_progress_tracking: bool,
+    progress_file: Path | None,
+) -> tuple[int, int, int]:
+    """
+    Worker function to process a batch of auctions in a separate process.
+    
+    This runs in its own process with its own event loop and ONNX session.
+    Each process gets its own memory space, allowing true parallel CPU utilization.
+    
+    Args:
+        batch_num: Batch number for tracking
+        chunk_ids: List of auction IDs to process in this batch
+        rate_limit: API rate limit
+        max_workers: Max concurrent workers within this process
+        batch_dir: Directory to write batch results
+        use_progress_tracking: Whether to track progress
+        progress_file: Path to progress file
+    
+    Returns:
+        Tuple of (batch_num, num_rows_written, num_auctions_processed)
+    """
+    # Create new event loop for this process
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        # Progress callback
+        def progress_callback(auction_id: int, success: bool) -> None:
+            if use_progress_tracking and progress_file:
+                tracker = ProgressTracker(progress_file=progress_file)
+                if success:
+                    tracker.mark_completed(auction_id)
+                else:
+                    tracker.mark_failed(auction_id)
+                tracker.save()
+        
+        # Fetch images for this batch
+        async def fetch_chunk():
+            async with ImageDataFetcher(
+                rate_limit=rate_limit,
+                max_concurrent=max_workers,
+            ) as fetcher:
+                return await fetcher.fetch_multiple_auctions(
+                    chunk_ids,
+                    progress_callback=progress_callback if use_progress_tracking else None,
+                )
+        
+        chunk_records = loop.run_until_complete(fetch_chunk())
+        
+        # Transform and write batch file
+        if chunk_records:
+            df_batch = transform_image_data(chunk_records)
+            if not df_batch.empty:
+                batch_file = batch_dir / f"batch_{batch_num:05d}.parquet"
+                batch_row_count = write_batch_parquet(df_batch, batch_file)
+                logger.info(
+                    f"[Process {os.getpid()}] Batch {batch_num}: {batch_row_count} images from {len(chunk_ids)} auctions"
+                )
+                return (batch_num, batch_row_count, len(chunk_ids))
+        
+        return (batch_num, 0, len(chunk_ids))
+        
+    finally:
+        loop.close()
+
+
+# =============================================================================
 # Main Scraping Function
 # =============================================================================
 
@@ -823,6 +959,7 @@ async def scrape_images(
     rate_limit: int = config.DEFAULT_RATE_LIMIT,
     output_file: Path | None = None,
     batch_size: int = 50,
+    num_processes: int | None = None,
 ) -> pd.DataFrame:
     """
     Scrape image embeddings from MaxSold API.
@@ -831,10 +968,11 @@ async def scrape_images(
         auction_ids: List of auction IDs to scrape (if None, loads from HF)
         limit: Maximum number of auctions to scrape
         use_progress_tracking: Whether to track and resume progress
-        max_workers: Maximum parallel workers
+        max_workers: Maximum async workers per process for I/O concurrency
         rate_limit: Maximum requests per second
         output_file: Output file path
         batch_size: Auctions per batch for memory efficiency
+        num_processes: Number of parallel processes (default: min(4, cpu_count))
 
     Returns:
         DataFrame with image embeddings
@@ -884,47 +1022,109 @@ async def scrape_images(
                 tracker.mark_failed(auction_id)
             tracker.save()
 
-    # Process in batches
+    # Determine optimal process count
+    if num_processes is None:
+        num_processes = min(4, os.cpu_count() or 4)
+    
+    # Adjust workers per process to balance total concurrency
+    # Target: num_processes × max_workers ≈ 8 (for 8 CPU cores)
+    if max_workers * num_processes > 8:
+        max_workers = max(2, 8 // num_processes)
+        logger.info(f"Adjusted workers to {max_workers} per process for optimal CPU usage")
+    
     logger.info(
         f"Starting to scrape images from {len(auction_ids)} auctions "
-        f"(batch size: {batch_size})..."
+        f"(batch size: {batch_size}, {num_processes} processes, {max_workers} workers/process)..."
     )
 
-    total_images = 0
-    auctions_processed = 0
-
+    # Split auctions into batches
+    batches = []
     for chunk_start in range(0, len(auction_ids), batch_size):
         chunk_ids = auction_ids[chunk_start : chunk_start + batch_size]
         chunk_num = chunk_start // batch_size + 1
-        total_chunks = (len(auction_ids) + batch_size - 1) // batch_size
+        batches.append((chunk_num, chunk_ids))
+    
+    total_batches = len(batches)
+    logger.info(f"Split into {total_batches} batches for parallel processing")
 
-        logger.info(
-            f"Processing chunk {chunk_num}/{total_chunks} "
-            f"({len(chunk_ids)} auctions)"
-        )
+    # Use multiprocessing for parallel batch processing
+    if num_processes > 1 and len(batches) > 1:
+        # Create temporary directory for batch files
+        batch_dir = output_file.parent / "_batches"
+        batch_dir.mkdir(exist_ok=True)
+        
+        # Process batches in parallel using ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=num_processes) as executor:
+            futures = []
+            for batch_num, chunk_ids in batches:
+                future = executor.submit(
+                    _process_batch_worker,
+                    batch_num,
+                    chunk_ids,
+                    rate_limit,
+                    max_workers,
+                    batch_dir,
+                    use_progress_tracking,
+                    tracker.progress_file if tracker else None,
+                )
+                futures.append(future)
+            
+            # Wait for all batches to complete with progress tracking
+            completed = 0
+            for future in as_completed(futures):
+                try:
+                    batch_num, num_rows, num_auctions = future.result()
+                    completed += 1
+                    logger.info(
+                        f"Batch {batch_num} complete: {num_rows} images from "
+                        f"{num_auctions} auctions ({completed}/{total_batches} batches)"
+                    )
+                except Exception as e:
+                    logger.error(f"Batch processing failed: {e}")
+        
+        # Merge all batch files into final output
+        logger.info("Merging batch files...")
+        total_images = merge_batch_parquets(batch_dir, output_file)
+        
+        # Clean up batch directory
+        try:
+            batch_dir.rmdir()
+        except:
+            pass
+    else:
+        # Single-process fallback for small jobs
+        logger.info("Using single-process mode")
+        total_images = 0
+        auctions_processed = 0
 
-        async with ImageDataFetcher(
-            rate_limit=rate_limit,
-            max_concurrent=max_workers,
-        ) as fetcher:
-            chunk_records = await fetcher.fetch_multiple_auctions(
-                chunk_ids,
-                progress_callback=progress_callback if use_progress_tracking else None,
+        for chunk_num, chunk_ids in batches:
+            logger.info(
+                f"Processing batch {chunk_num}/{total_batches} "
+                f"({len(chunk_ids)} auctions)"
             )
 
-        auctions_processed += len(chunk_ids)
+            async with ImageDataFetcher(
+                rate_limit=rate_limit,
+                max_concurrent=max_workers,
+            ) as fetcher:
+                chunk_records = await fetcher.fetch_multiple_auctions(
+                    chunk_ids,
+                    progress_callback=progress_callback if use_progress_tracking else None,
+                )
 
-        if chunk_records:
-            df_batch = transform_image_data(chunk_records)
+            auctions_processed += len(chunk_ids)
 
-            if not df_batch.empty:
-                total_images = append_to_parquet_efficient(df_batch, output_file)
-                logger.info(f"Saved chunk {chunk_num}. Total: {total_images:,} images")
+            if chunk_records:
+                df_batch = transform_image_data(chunk_records)
 
-            del df_batch
-            del chunk_records
+                if not df_batch.empty:
+                    total_images = append_to_parquet_efficient(df_batch, output_file)
+                    logger.info(f"Saved batch {chunk_num}. Total: {total_images:,} images")
 
-        logger.info(f"Progress: {auctions_processed}/{len(auction_ids)} auctions")
+                del df_batch
+                del chunk_records
+
+            logger.info(f"Progress: {auctions_processed}/{len(auction_ids)} auctions")
 
     # Load final result
     if output_file.exists():
@@ -1083,6 +1283,12 @@ def main() -> None:
         help="Auctions per batch (default: 50)",
     )
     parser.add_argument(
+        "--processes",
+        type=int,
+        default=None,
+        help=f"Number of parallel processes (default: min(4, CPU count) = {min(4, os.cpu_count() or 4)})",
+    )
+    parser.add_argument(
         "--output",
         type=str,
         help="Output file path",
@@ -1122,6 +1328,7 @@ def main() -> None:
             rate_limit=args.rate_limit,
             output_file=Path(args.output) if args.output else None,
             batch_size=args.batch_size,
+            num_processes=args.processes,
         )
     )
 

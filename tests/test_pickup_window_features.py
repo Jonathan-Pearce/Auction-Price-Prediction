@@ -12,7 +12,6 @@ Tests cover:
 """
 
 import pandas as pd
-import pytest
 
 from src.features import engineer_auction_features, extract_pickup_windows
 

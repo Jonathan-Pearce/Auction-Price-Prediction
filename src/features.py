@@ -12,7 +12,6 @@ Transforms raw auction, item, and bid data into features for ML models:
 """
 
 import re
-from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -125,6 +124,13 @@ def extract_pickup_windows(auction_removal_info: str) -> dict[str, Any]:
             # Convert to decimal hours
             start_decimal = start_hour_24 + start_min / 60.0
             end_decimal = end_hour_24 + end_min / 60.0
+            
+            # Skip invalid time ranges where end is before start
+            if end_decimal <= start_decimal:
+                logger.warning(
+                    f"Invalid time range detected: {start_decimal:.2f} to {end_decimal:.2f}. Skipping."
+                )
+                continue
             
             time_ranges.append((start_decimal, end_decimal))
         

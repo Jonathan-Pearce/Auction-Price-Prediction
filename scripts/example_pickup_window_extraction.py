@@ -6,10 +6,12 @@ This script shows how to use the new pickup window feature engineering
 functionality with real auction data from the Hugging Face dataset.
 """
 
-from datasets import load_dataset
 import pandas as pd
-from src.features import engineer_auction_features, extract_pickup_windows
+from bs4 import BeautifulSoup
+from datasets import load_dataset
 from loguru import logger
+
+from src.features import engineer_auction_features, extract_pickup_windows
 
 
 def main():
@@ -71,7 +73,6 @@ def main():
         if enriched_df.loc[idx, 'auction_removal_info']:
             html = enriched_df.loc[idx, 'auction_removal_info']
             # Extract just the pickup line for display
-            from bs4 import BeautifulSoup
             soup = BeautifulSoup(html, 'html.parser')
             text = soup.get_text()
             lines = [line.strip() for line in text.split('\n') if line.strip()]

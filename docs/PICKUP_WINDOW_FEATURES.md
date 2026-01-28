@@ -43,6 +43,7 @@ The `extract_pickup_windows()` function extracts the following features from the
 ### Basic Usage
 
 ```python
+import pandas as pd
 from src.features import extract_pickup_windows
 
 # HTML from auction_removal_info column
@@ -68,8 +69,9 @@ print(features)
 ### Integration with DataFrame
 
 ```python
-from src.features import engineer_auction_features
 import pandas as pd
+
+from src.features import engineer_auction_features
 
 # Load auction data with auction_removal_info column
 df = pd.DataFrame({
@@ -90,9 +92,10 @@ print(enriched_df[['auction_id', 'num_pickup_windows', 'total_pickup_hours']])
 ### With Hugging Face Dataset
 
 ```python
-from datasets import load_dataset
-from src.features import engineer_auction_features
 import pandas as pd
+from datasets import load_dataset
+
+from src.features import engineer_auction_features
 
 # Load auction data
 ds = load_dataset('jpearce610/auction_data', split='train')

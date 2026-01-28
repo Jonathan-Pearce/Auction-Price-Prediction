@@ -10,14 +10,14 @@ data/interim/*
 data/processed/*
 data/external/*
 !data/*/.gitkeep
-# Allow enriched data CSVs (small datasets that live in repo)
-!data/enriched/*.csv
-!data/enriched/*.md
 *.parquet
 *.csv
 *.json
 !pyproject.toml
 !*.example.json
+# Allow enriched data CSVs (small datasets that live in repo)
+!data/enriched/*.csv
+!data/enriched/*.md
 
 # DuckDB database files
 *.duckdb

@@ -33,7 +33,7 @@ dependencies = [
 [project.optional-dependencies]
 # Data collection and processing
 data = [
-    "httpx>=0.25.0",
+    "httpx[http2]>=0.25.0",  # HTTP/2 support for better performance
     "aiohttp>=3.9.0",
     "tenacity>=8.2.0",
     "duckdb>=0.9.0",
@@ -42,6 +42,7 @@ data = [
     "polars>=0.19.0",
     "pillow>=10.0.0",
     "opencv-python-headless>=4.9.0",
+    "onnx>=1.15.0",
     "onnxruntime>=1.17.0",
 ]
 

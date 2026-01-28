@@ -29,8 +29,8 @@ api:
 # Rate Limiting Configuration
 # =============================================================================
 rate_limiting:
-  requests_per_second: 10
-  concurrent_requests: 5  # maximum concurrent auction fetches
+  requests_per_second: 20  # Increased for faster scraping
+  concurrent_requests: 10  # Increased concurrent processing
 
 # =============================================================================
 # Data Field Configuration
@@ -154,9 +154,9 @@ parallel_processing:
   
   # Parallel workers
   workers:
-    default_max: 5
+    default_max: 15  # Increased for better parallelism
     min: 1
-    max: 20
+    max: 50  # Allow more workers if needed
 
 # =============================================================================
 # Hugging Face Configuration
@@ -251,9 +251,9 @@ image_processing:
   
   # HTTP settings for image download
   http:
-    timeout: 30
-    max_retries: 3
-    retry_delay: 1.0
+    timeout: 15  # Reduced timeout for faster failures
+    max_retries: 2  # Reduced retries for faster failure handling
+    retry_delay: 0.5  # Faster retry delay
 
 # =============================================================================
 # Validation Configuration

@@ -114,10 +114,20 @@ class ImageEmbeddingExtractor:
         )
         model.graph.output.append(output_node)
 
-        # Create session from modified model
+        # Create session from modified model with optimized settings
         model_bytes = model.SerializeToString()
+        
+        # Configure session options for better performance
+        sess_options = ort.SessionOptions()
+        sess_options.intra_op_num_threads = 2  # Threads per operation
+        sess_options.inter_op_num_threads = 2  # Threads between operations
+        sess_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        
         self._session = ort.InferenceSession(
-            model_bytes, providers=["CPUExecutionProvider"]
+            model_bytes,
+            sess_options=sess_options,
+            providers=["CPUExecutionProvider"]
         )
         self._input_name = self._session.get_inputs()[0].name
 
@@ -221,6 +231,8 @@ class ImageEmbeddingExtractor:
                     f"Unexpected embedding dimension: {len(embedding)}, "
                     f"expected {self.embedding_dim}"
                 )
+            else:
+                logger.debug(f"Extracted {self.embedding_dim}-dim embedding successfully")
 
             return embedding
 
@@ -273,10 +285,19 @@ class ImageDataFetcher:
         self._extractor: ImageEmbeddingExtractor | None = None
 
     async def __aenter__(self) -> "ImageDataFetcher":
-        """Initialize async HTTP client."""
+        """Initialize async HTTP client with connection pooling."""
+        # Configure connection pooling for better performance
+        limits = httpx.Limits(
+            max_connections=100,  # Total connection pool
+            max_keepalive_connections=50,  # Reuse connections
+            keepalive_expiry=30.0,  # Keep connections alive
+        )
+        
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout),
             follow_redirects=True,
+            limits=limits,
+            http2=True,  # Enable HTTP/2 for better multiplexing
             headers={
                 "User-Agent": "AuctionPricePredictor/1.0 (Research Project)",
                 "Accept": "image/*,application/json",
@@ -456,6 +477,8 @@ class ImageDataFetcher:
             return None
 
         try:
+            logger.debug(f"Processing image: item {record.get('item_id')}, index {record.get('image_index')}")
+            
             # Download image
             image_bytes = await self.download_image(image_url)
             if image_bytes is None:
@@ -466,6 +489,8 @@ class ImageDataFetcher:
             if embedding is None:
                 return None
 
+            logger.debug(f"Successfully processed image: item {record.get('item_id')}, index {record.get('image_index')}")
+            
             # Return record with embedding
             return {
                 "auction_id": record["auction_id"],
@@ -511,10 +536,23 @@ class ImageDataFetcher:
 
             # Process images with concurrency control
             semaphore = asyncio.Semaphore(self.max_concurrent)
+            processed_count = 0
+            report_interval = max(1, len(all_records) // 10)  # Report every 10%
 
             async def process_with_semaphore(record):
+                nonlocal processed_count
                 async with semaphore:
-                    return await self.process_image(record)
+                    result = await self.process_image(record)
+                    processed_count += 1
+                    
+                    # Log progress every report_interval images
+                    if processed_count % report_interval == 0:
+                        pct = (processed_count / len(all_records)) * 100
+                        logger.info(
+                            f"Progress: {processed_count}/{len(all_records)} images processed ({pct:.1f}%)"
+                        )
+                    
+                    return result
 
             tasks = [process_with_semaphore(r) for r in all_records]
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -555,8 +593,12 @@ class ImageDataFetcher:
         """
         all_records = []
 
-        for auction_id in auction_ids:
+        for idx, auction_id in enumerate(auction_ids, 1):
             try:
+                logger.info(f"\n{'='*60}")
+                logger.info(f"Processing auction {auction_id} ({idx}/{len(auction_ids)})")
+                logger.info(f"{'='*60}")
+                
                 records = await self.process_auction_images(auction_id)
                 all_records.extend(records)
 

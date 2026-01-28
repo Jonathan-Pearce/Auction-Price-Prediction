@@ -192,6 +192,7 @@ Visit `http://localhost:8000` for the API docs or `http://localhost:7860` for th
 - [System Design](docs/DESIGN.md) - Architecture and data flow
 - [Data Documentation](docs/DATA.md) - Data collection and storage
 - [Model Documentation](docs/MODELS.md) - ML model details
+- [Text Feature Engineering](docs/TEXT_FEATURES.md) - Text feature extraction methods
 - [Deployment Guide](docs/DEPLOYMENT.md) - Hugging Face deployment
 - [Development Guide](docs/DEVELOPMENT.md) - Development workflow
 

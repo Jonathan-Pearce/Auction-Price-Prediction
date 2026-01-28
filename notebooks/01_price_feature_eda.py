@@ -20,8 +20,6 @@ import seaborn as sns
 from scipy import stats
 from scipy.stats import boxcox, yeojohnson
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
 
 warnings.filterwarnings("ignore")
 
@@ -419,7 +417,7 @@ def analyze_zero_bid_features(df, target_col="item_current_bid", top_n=20):
     print("-" * 80)
 
     cumulative = 0
-    for idx, row in feature_importance.head(top_n).iterrows():
+    for _, row in feature_importance.head(top_n).iterrows():
         cumulative += row["importance"]
         print(
             f"{row['feature']:<40} {row['importance']:>14.4f} {cumulative:>14.2%}"
@@ -432,7 +430,7 @@ def analyze_zero_bid_features(df, target_col="item_current_bid", top_n=20):
     print(f"{'Feature':<40} {'Zero-Bid Mean':<15} {'Non-Zero Mean':<15} {'Difference':<15}")
     print("-" * 80)
 
-    for idx, row in feature_importance.head(10).iterrows():
+    for _, row in feature_importance.head(10).iterrows():
         feat = row["feature"]
         zero_mean = df_analysis[df_analysis["has_bids"] == 0][feat].mean()
         nonzero_mean = df_analysis[df_analysis["has_bids"] == 1][feat].mean()
@@ -623,7 +621,7 @@ def hybrid_metric(y_true, y_pred):
     y_true_binary = (y_true > 0).astype(int)
     y_pred_binary = (y_pred > 0).astype(int)
     zero_accuracy = (y_true_binary == y_pred_binary).mean()
-    
+
     # Regression error on non-zeros
     mask = y_true > 0
     if mask.sum() > 0:
@@ -631,7 +629,7 @@ def hybrid_metric(y_true, y_pred):
         relative_mae = mae / y_true[mask].mean()
     else:
         relative_mae = 0
-    
+
     # Combined metric (tune weights)
     combined = 0.5 * zero_accuracy - 0.3 * relative_mae
     return combined
@@ -843,7 +841,7 @@ def main():
     visualize_transformations(df, transformations)
 
     # Analyze zero-bid features
-    feature_importance = analyze_zero_bid_features(df)
+    analyze_zero_bid_features(df)
 
     # Generate and save recommendations
     recommendations = generate_recommendations()
@@ -863,7 +861,7 @@ def main():
     print(f"Saved statistics to {summary_file}")
 
     print("\nAnalysis complete!")
-    print(f"\nGenerated files:")
+    print("\nGenerated files:")
     print(f"  - {OUTPUT_DIR / 'price_distribution.png'}")
     print(f"  - {OUTPUT_DIR / 'transformations.png'}")
     print(f"  - {OUTPUT_DIR / 'PRICE_FEATURE_RECOMMENDATIONS.md'}")

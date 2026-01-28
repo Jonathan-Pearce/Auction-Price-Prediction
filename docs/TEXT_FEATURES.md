@@ -714,13 +714,30 @@ class TextFeatureExtractor:
 ## Next Steps
 
 1. ✅ Review this document
-2. ⬜ Implement `extract_handcrafted_features()` in `src/features.py`
-3. ⬜ Add sentence-transformers to dependencies
-4. ⬜ Create `TextFeatureExtractor` class in `src/features.py`
-5. ⬜ Update `extract_text_features()` to use new implementation
-6. ⬜ Test on sample data from Hugging Face
-7. ⬜ Benchmark inference times
+2. ✅ Implement `extract_handcrafted_features()` in `src/features.py`
+3. ✅ Add sentence-transformers to dependencies
+4. ✅ Create `TextFeatureExtractor` functionality in `src/features.py`
+5. ✅ Update `extract_text_features()` to use new implementation
+6. ⬜ Test on sample data from Hugging Face dataset
+7. ⬜ Benchmark inference times on production hardware
 8. ⬜ Integrate with text model training pipeline
+
+## Demo Script
+
+A working example demonstrating all text feature extraction methods is available:
+
+```bash
+# Run the demo
+python examples/text_features_demo.py
+
+# Or with PYTHONPATH
+PYTHONPATH=. python examples/text_features_demo.py
+```
+
+This will show:
+- Timing comparisons for each method
+- Output shapes and feature examples
+- Recommendations for your use case
 
 ---
 

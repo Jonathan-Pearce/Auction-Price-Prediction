@@ -11,6 +11,7 @@ Transforms raw auction, item, and bid data into features for ML models:
 - Sequential features: Bid history time series
 """
 
+import re
 from typing import Any
 
 import pandas as pd
@@ -146,7 +147,6 @@ def preprocess_text(text: str) -> str:
     text = str(text).lower().strip()
     
     # Normalize whitespace
-    import re
     text = re.sub(r'\s+', ' ', text)
 
     # TODO: Add more sophisticated preprocessing
@@ -165,13 +165,11 @@ def extract_handcrafted_text_features(text: str) -> dict[str, Any]:
     making them ideal for tabular models and quick inference.
     
     Args:
-        text: Item description text
+        text: Item description text (raw, unprocessed)
         
     Returns:
         Dictionary of numeric features
     """
-    import re
-    
     if not text or pd.isna(text):
         text = ""
     
@@ -179,10 +177,16 @@ def extract_handcrafted_text_features(text: str) -> dict[str, Any]:
     
     # Basic length features
     features['text_char_count'] = len(text)
-    features['text_word_count'] = len(text.split())
-    features['text_sentence_count'] = len(re.split(r'[.!?]+', text))
+    words = text.split()
+    features['text_word_count'] = len(words)
+    
+    # Sentence count (filter empty strings)
+    sentences = [s for s in re.split(r'[.!?]+', text) if s.strip()]
+    features['text_sentence_count'] = len(sentences)
+    
+    # Average word length (excluding spaces)
     features['text_avg_word_length'] = (
-        features['text_char_count'] / max(features['text_word_count'], 1)
+        sum(len(word) for word in words) / max(len(words), 1)
     )
     
     # Lexical features
@@ -192,28 +196,40 @@ def extract_handcrafted_text_features(text: str) -> dict[str, Any]:
     features['text_digit_count'] = sum(c.isdigit() for c in text)
     features['text_punctuation_count'] = sum(c in '.,!?;:' for c in text)
     
-    # Auction-specific keyword presence
+    # Auction-specific keyword presence (use word boundaries)
     text_lower = text.lower()
     
     # Brand/authenticity keywords
     brand_keywords = ['authentic', 'original', 'genuine', 'branded', 'signed']
-    features['text_brand_keyword_count'] = sum(word in text_lower for word in brand_keywords)
-    features['text_has_brand_keywords'] = int(any(word in text_lower for word in brand_keywords))
+    features['text_brand_keyword_count'] = sum(
+        bool(re.search(rf'\b{re.escape(word)}\b', text_lower)) 
+        for word in brand_keywords
+    )
+    features['text_has_brand_keywords'] = int(features['text_brand_keyword_count'] > 0)
     
     # Condition keywords
     condition_keywords = ['mint', 'excellent', 'good', 'fair', 'poor', 'damaged', 'worn', 'new']
-    features['text_condition_keyword_count'] = sum(word in text_lower for word in condition_keywords)
-    features['text_has_condition_keywords'] = int(any(word in text_lower for word in condition_keywords))
+    features['text_condition_keyword_count'] = sum(
+        bool(re.search(rf'\b{re.escape(word)}\b', text_lower)) 
+        for word in condition_keywords
+    )
+    features['text_has_condition_keywords'] = int(features['text_condition_keyword_count'] > 0)
     
     # Quality/collectibility keywords
     quality_keywords = ['rare', 'vintage', 'antique', 'collectible', 'limited', 'unique', 'classic']
-    features['text_quality_keyword_count'] = sum(word in text_lower for word in quality_keywords)
-    features['text_has_quality_keywords'] = int(any(word in text_lower for word in quality_keywords))
+    features['text_quality_keyword_count'] = sum(
+        bool(re.search(rf'\b{re.escape(word)}\b', text_lower)) 
+        for word in quality_keywords
+    )
+    features['text_has_quality_keywords'] = int(features['text_quality_keyword_count'] > 0)
     
     # Material keywords
     material_keywords = ['wood', 'metal', 'glass', 'ceramic', 'plastic', 'leather', 'silver', 'gold']
-    features['text_material_keyword_count'] = sum(word in text_lower for word in material_keywords)
-    features['text_has_material_keywords'] = int(any(word in text_lower for word in material_keywords))
+    features['text_material_keyword_count'] = sum(
+        bool(re.search(rf'\b{re.escape(word)}\b', text_lower)) 
+        for word in material_keywords
+    )
+    features['text_has_material_keywords'] = int(features['text_material_keyword_count'] > 0)
     
     return features
 
@@ -246,8 +262,10 @@ def extract_text_features(
     """
     logger.info(f"Extracting text features using {method}...")
     
-    # Preprocess texts
-    texts = [preprocess_text(text) for text in texts]
+    # For handcrafted method, don't preprocess (need raw text for features like uppercase)
+    if method != "handcrafted":
+        # Preprocess texts for ML methods
+        texts = [preprocess_text(text) for text in texts]
 
     if method == "tfidf":
         from sklearn.feature_extraction.text import TfidfVectorizer
@@ -303,16 +321,16 @@ def extract_text_features(
             )
             raise
         
+        import numpy as np
+        
         # Use pre-trained model if not provided
         if vectorizer is None:
             # Use fast, high-quality model (384 dimensions)
             model = SentenceTransformer('all-MiniLM-L6-v2')
-            model.eval()
         else:
             model = vectorizer
         
         # Generate embeddings
-        import numpy as np
         features = model.encode(
             texts,
             batch_size=32,
@@ -323,7 +341,7 @@ def extract_text_features(
         return features, model
     
     elif method == "handcrafted":
-        # Extract hand-crafted features
+        # Extract hand-crafted features from raw text
         features_list = [extract_handcrafted_text_features(text) for text in texts]
         features = pd.DataFrame(features_list)
         

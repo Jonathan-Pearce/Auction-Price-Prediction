@@ -713,6 +713,23 @@ HF_ITEM_DATASET_TAGS = get_config_value(
 )
 HF_ITEM_UPLOAD_FILES = get_config_value("huggingface", "item_upload_files", default=[])
 
+# Enriched Item Dataset Configuration
+HF_ENRICHED_ITEM_DATASET_NAME = get_config_value(
+    "huggingface", "enriched_item_dataset", "name", default="maxsold-enriched-item-data"
+)
+HF_ENRICHED_ITEM_DATASET_DESCRIPTION = get_config_value(
+    "huggingface", "enriched_item_dataset", "description", default=""
+)
+HF_ENRICHED_ITEM_DATASET_LICENSE = get_config_value(
+    "huggingface", "enriched_item_dataset", "license", default="cc-by-4.0"
+)
+HF_ENRICHED_ITEM_DATASET_TAGS = get_config_value(
+    "huggingface", "enriched_item_dataset", "tags", default=[]
+)
+HF_ENRICHED_ITEM_UPLOAD_FILES = get_config_value(
+    "huggingface", "enriched_item_upload_files", default=[]
+)
+
 # Bid Dataset Configuration
 HF_BID_DATASET_NAME = get_config_value(
     "huggingface", "bid_dataset", "name", default="maxsold-bid-data"
@@ -752,3 +769,134 @@ REQUIRED_OUTPUT_FIELDS = get_config_value(
     "validation", "required_output_fields", default=[]
 )
 NUMERIC_FIELDS = get_config_value("validation", "numeric_fields", default=[])
+
+# =============================================================================
+# Enriched Item Configuration
+# =============================================================================
+
+# Enriched Item Fields
+ENRICHED_ITEM_FIELDS = get_config_value("fields", "enriched_item_fields", default=[])
+ENRICHED_ITEM_JSON_FIELDS = get_config_value(
+    "fields", "enriched_item_json_fields", default=[]
+)
+ENRICHED_ITEM_GENERATED_DESCRIPTION_FIELDS = get_config_value(
+    "fields", "enriched_item_generated_description_fields", default=[]
+)
+ENRICHED_ITEM_FIELD_RENAME_MAP = get_config_value(
+    "fields", "enriched_item_field_rename_map", default={}
+)
+ENRICHED_ITEM_COLUMN_PREFIX = get_config_value(
+    "fields", "enriched_item_column_prefix", default="enriched_item_"
+)
+
+# Enriched Item Storage
+ENRICHED_ITEM_RAW_OUTPUT_DIR = (
+    PROJECT_ROOT / get_config_value("storage", "output", "enriched_item_raw_directory")
+)
+ENRICHED_ITEM_PROCESSED_OUTPUT_DIR = (
+    PROJECT_ROOT
+    / get_config_value("storage", "output", "enriched_item_processed_directory")
+)
+ENRICHED_ITEM_DATA_FILENAME = get_config_value(
+    "storage", "output", "enriched_item_data_filename", default="enriched_item_data.parquet"
+)
+ENRICHED_ITEM_PROGRESS_FILE = (
+    ENRICHED_ITEM_RAW_OUTPUT_DIR
+    / get_config_value(
+        "storage",
+        "progress",
+        "enriched_item_progress_filename",
+        default="enriched_item_scraper_progress.json",
+    )
+)
+
+# Hugging Face Item Dataset Input
+HF_ITEM_DATASET_REPO = get_config_value(
+    "storage", "input", "hf_item_dataset_repo", default="jpearce610/item_data"
+)
+HF_ITEM_ID_COLUMN = get_config_value(
+    "storage", "input", "hf_item_id_column", default="item_id"
+)
+
+
+# =============================================================================
+# Enriched Item Helper Functions
+# =============================================================================
+
+
+def get_enriched_item_output_directory(processed: bool = True) -> Path:
+    """
+    Get enriched item output directory path.
+
+    Args:
+        processed: If True, returns processed directory; otherwise raw directory
+
+    Returns:
+        Path to output directory
+    """
+    key = "enriched_item_processed_directory" if processed else "enriched_item_raw_directory"
+    directory = get_config_value("storage", "output", key)
+    return PROJECT_ROOT / directory
+
+
+def get_enriched_item_progress_file() -> Path:
+    """Get path to enriched item scraper progress tracking file."""
+    enriched_item_raw_dir = get_enriched_item_output_directory(processed=False)
+    filename = get_config_value(
+        "storage",
+        "progress",
+        "enriched_item_progress_filename",
+        default="enriched_item_scraper_progress.json",
+    )
+    return enriched_item_raw_dir / filename
+
+
+def get_renamed_enriched_item_field_name(field_name: str) -> str:
+    """
+    Get renamed enriched item field name based on configuration mapping.
+
+    Args:
+        field_name: Original enriched item field name
+
+    Returns:
+        Renamed field name (or original if no mapping exists)
+    """
+    rename_map = get_config_value("fields", "enriched_item_field_rename_map", default={})
+    return rename_map.get(field_name, field_name)
+
+
+def get_prefixed_enriched_item_field_name(field_name: str) -> str:
+    """
+    Add configured enriched_item_ prefix to field name.
+
+    Exception: item_id and auction_id do not get the prefix and remain as-is.
+
+    Args:
+        field_name: Original field name
+
+    Returns:
+        Prefixed field name with enriched_item_ prefix (except for item_id and auction_id)
+    """
+    # Exception: item_id and auction_id should not have the enriched_item_ prefix
+    if field_name in ("item_id", "auction_id"):
+        return field_name
+
+    prefix = get_config_value("fields", "enriched_item_column_prefix", default="enriched_item_")
+    return f"{prefix}{field_name}"
+
+
+def apply_enriched_item_field_transformations(field_name: str) -> str:
+    """
+    Apply all enriched item field transformations (rename + enriched_item_ prefix).
+
+    Args:
+        field_name: Original enriched item field name
+
+    Returns:
+        Fully transformed field name with enriched_item_ prefix
+    """
+    # First rename
+    renamed = get_renamed_enriched_item_field_name(field_name)
+    # Then add enriched_item_ prefix
+    return get_prefixed_enriched_item_field_name(renamed)
+

@@ -89,13 +89,31 @@ python -m src.data.auction_scraper --limit 100 --upload-hf
 **Item-level data** (detailed item and bid history):
 ```bash
 # Scrape item-level data from MaxSold
-make scrape
+make scrape-items
 
 # Or run directly
-python -m src.data.scraper
+python -m src.data.item_scraper
+
+# Scrape sample (10 auctions)
+make scrape-items-sample
 ```
 
-See [AUCTION_SCRAPER.md](docs/AUCTION_SCRAPER.md) for detailed documentation.
+**Enriched item data** (detailed item attributes, brands, categories):
+```bash
+# Scrape enriched item data
+make scrape-enriched
+
+# Or run directly
+python -m src.data.enriched_item_scraper
+
+# Scrape sample (100 items)
+make scrape-enriched-sample
+```
+
+See documentation:
+- [AUCTION_SCRAPER.md](docs/AUCTION_SCRAPER.md) - Auction-level data
+- [ITEM_SCRAPER.md](docs/ITEM_SCRAPER.md) - Item-level data
+- [ENRICHED_ITEM_SCRAPER.md](docs/ENRICHED_ITEM_SCRAPER.md) - Enriched item data
 
 ### Training Models
 

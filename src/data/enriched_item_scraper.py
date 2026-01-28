@@ -24,6 +24,8 @@ Usage:
 import argparse
 import asyncio
 import json
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -72,16 +74,27 @@ class EnrichedItemDataFetcher:
         self.rate_limit = rate_limit
         self.max_concurrent = max_concurrent
         self.timeout = timeout
-        self.min_interval = 1.0 / rate_limit
-        self.last_request_time = 0.0
-        self._lock = asyncio.Lock()
+        # Token bucket rate limiting (allows true concurrency)
+        self.tokens = float(rate_limit)  # Start with full bucket
+        self.max_tokens = float(rate_limit)
+        self.refill_rate = float(rate_limit)  # Tokens per second
+        self.last_refill_time = 0.0
+        self._token_lock = asyncio.Lock()  # Only for token updates, not requests
         self._client: httpx.AsyncClient | None = None
 
     async def __aenter__(self) -> "EnrichedItemDataFetcher":
-        """Initialize async HTTP client."""
+        """Initialize async HTTP client with connection pooling."""
+        # Configure connection pool for better performance with concurrent requests
+        limits = httpx.Limits(
+            max_connections=self.max_concurrent * 2,  # Allow some buffer
+            max_keepalive_connections=self.max_concurrent * 2,
+            keepalive_expiry=30.0,  # Keep connections alive for 30 seconds
+        )
+        
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout),
             follow_redirects=True,
+            limits=limits,
             headers={
                 "User-Agent": "AuctionPricePredictor/1.0 (Research Project)",
                 "Accept": "application/json",
@@ -104,20 +117,49 @@ class EnrichedItemDataFetcher:
         return self._client
 
     async def _rate_limit(self) -> None:
-        """Apply rate limiting."""
-        async with self._lock:
-            current_time = asyncio.get_event_loop().time()
-            time_since_last = current_time - self.last_request_time
+        """Apply token bucket rate limiting to allow concurrent requests."""
+        while True:
+            async with self._token_lock:
+                current_time = asyncio.get_event_loop().time()
+                
+                # Refill tokens based on time elapsed
+                if self.last_refill_time > 0:
+                    time_elapsed = current_time - self.last_refill_time
+                    tokens_to_add = time_elapsed * self.refill_rate
+                    self.tokens = min(self.max_tokens, self.tokens + tokens_to_add)
+                
+                self.last_refill_time = current_time
+                
+                # Check if we have a token available
+                if self.tokens >= 1.0:
+                    self.tokens -= 1.0
+                    return  # Token acquired, proceed with request
+                
+                # Calculate wait time for next token
+                wait_time = (1.0 - self.tokens) / self.refill_rate
+            
+            # Wait outside the lock to allow other coroutines to run
+            await asyncio.sleep(wait_time)
 
-            if time_since_last < self.min_interval:
-                await asyncio.sleep(self.min_interval - time_since_last)
-
-            self.last_request_time = asyncio.get_event_loop().time()
+    def _should_retry(self, exception: Exception) -> bool:
+        """Determine if request should be retried based on exception type."""
+        # Retry network errors and timeouts
+        if isinstance(exception, (httpx.TimeoutException, httpx.NetworkError)):
+            return True
+        
+        # For HTTP errors, only retry 5xx server errors and 429 rate limits
+        if isinstance(exception, httpx.HTTPStatusError):
+            status_code = exception.response.status_code
+            # Don't retry 404s or other client errors
+            return status_code >= 500 or status_code == 429
+        
+        return False
 
     @retry(
         stop=stop_after_attempt(config.MAX_RETRIES),
         wait=wait_exponential(multiplier=1, min=config.RETRY_DELAY, max=10),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+        retry=lambda retry_state: retry_state.outcome.failed and 
+              retry_state.args[0]._should_retry(retry_state.outcome.exception()),
     )
     async def fetch_enriched_item(self, item_id: int) -> dict[str, Any] | None:
         """
@@ -310,68 +352,90 @@ def transform_enriched_item_data(items: list[dict[str, Any]]) -> pd.DataFrame:
 
     df = pd.DataFrame(items)
 
-    # Rename fields according to mapping (amLotId -> item_id, amAuctionId -> auction_id)
-    rename_map = {}
+    # Build complete column mapping: rename + prefix in one operation
+    # This avoids creating an intermediate DataFrame copy
+    final_rename_map = {}
     for old_name in df.columns:
-        new_name = config.get_renamed_enriched_item_field_name(old_name)
-        if new_name != old_name:
-            rename_map[old_name] = new_name
-
-    if rename_map:
-        df = df.rename(columns=rename_map)
-        logger.debug(f"Renamed columns: {rename_map}")
-
-    # Add enriched_item_ prefix to all columns (except item_id and auction_id)
-    prefix_map = {
-        col: config.get_prefixed_enriched_item_field_name(col) for col in df.columns
-    }
-    df = df.rename(columns=prefix_map)
-    logger.debug(f"Added 'enriched_item_' prefix to columns: {list(df.columns)}")
+        # First apply field renaming (e.g., amLotId -> item_id)
+        renamed = config.get_renamed_enriched_item_field_name(old_name)
+        # Then apply prefix (e.g., title -> enriched_item_title, but skip item_id/auction_id)
+        final_name = config.get_prefixed_enriched_item_field_name(renamed)
+        final_rename_map[old_name] = final_name
+    
+    # Single rename operation instead of two
+    df = df.rename(columns=final_rename_map)
+    logger.debug(f"Transformed columns: {list(final_rename_map.keys())} -> {list(df.columns)}")
 
     return df
 
 
-def append_to_parquet_efficient(df_new: pd.DataFrame, output_file: Path) -> int:
+def write_batch_parquet(df_batch: pd.DataFrame, batch_file: Path) -> int:
     """
-    Append DataFrame to parquet file efficiently using pyarrow.
-
-    This avoids loading the entire existing file into memory.
+    Write a single batch to a parquet file.
+    
+    This replaces the O(n²) append pattern with O(n) writes.
+    All batch files are merged once at the end.
 
     Args:
-        df_new: New data to append
-        output_file: Path to parquet file
+        df_batch: Batch data to write
+        batch_file: Path to batch parquet file
 
     Returns:
-        Total number of rows after append
+        Number of rows written
+    """
+    df_batch.to_parquet(batch_file, index=False)
+    logger.info(f"Wrote batch file {batch_file.name} with {len(df_batch)} records")
+    return len(df_batch)
+
+
+def merge_batch_parquets(batch_dir: Path, output_file: Path) -> int:
+    """
+    Merge all batch parquet files into final output file.
+    
+    This is done once at the end, avoiding O(n²) complexity of
+    repeated read-concat-write operations.
+
+    Args:
+        batch_dir: Directory containing batch parquet files
+        output_file: Final output parquet file
+
+    Returns:
+        Total number of rows in merged file
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
-
-    if output_file.exists():
-        # Read existing parquet file metadata to get row count
-        existing_table = pq.read_table(output_file)
-
-        # Convert new df to arrow table
-        new_table = pa.Table.from_pandas(df_new, preserve_index=False)
-
-        # Write both tables to parquet
-        combined_table = pa.concat_tables([existing_table, new_table])
-        pq.write_table(combined_table, output_file)
-
-        total_count = len(combined_table)
-        logger.info(f"Appended {len(df_new)} rows (total: {total_count})")
-
-        # Clean up
-        del existing_table
-        del new_table
-        del combined_table
-
-        return total_count
-    else:
-        # First write
-        df_new.to_parquet(output_file, index=False)
-        logger.info(f"Created {output_file} with {len(df_new)} records")
-        return len(df_new)
+    
+    # Find all batch files
+    batch_files = sorted(batch_dir.glob("batch_*.parquet"))
+    
+    if not batch_files:
+        logger.warning("No batch files found to merge")
+        return 0
+    
+    logger.info(f"Merging {len(batch_files)} batch files into {output_file}")
+    
+    # Read all batch tables
+    tables = []
+    for batch_file in batch_files:
+        table = pq.read_table(batch_file)
+        tables.append(table)
+        logger.debug(f"Loaded {batch_file.name}: {len(table)} rows")
+    
+    # Concatenate all tables
+    combined_table = pa.concat_tables(tables)
+    
+    # Write final file
+    pq.write_table(combined_table, output_file)
+    total_rows = len(combined_table)
+    
+    logger.info(f"Merged {len(batch_files)} batches into {output_file} ({total_rows:,} total rows)")
+    
+    # Clean up batch files
+    for batch_file in batch_files:
+        batch_file.unlink()
+        logger.debug(f"Deleted batch file {batch_file.name}")
+    
+    return total_rows
 
 
 # =============================================================================
@@ -442,6 +506,84 @@ class ProgressTracker:
     def filter_pending(self, item_ids: list[int]) -> list[int]:
         """Filter out already completed items."""
         return [iid for iid in item_ids if iid not in self.completed_ids]
+
+
+# =============================================================================
+# Multi-Core Processing Worker
+# =============================================================================
+
+
+def _process_batch_worker(
+    batch_num: int,
+    chunk_ids: list[int],
+    rate_limit: int,
+    max_workers: int,
+    batch_dir: Path,
+    use_progress_tracking: bool,
+    progress_file: Path,
+) -> tuple[int, int, int]:
+    """
+    Worker function to process a single batch in a separate process.
+    
+    This function runs in its own process with its own event loop,
+    allowing true multi-core parallelism for I/O-bound operations.
+    
+    Args:
+        batch_num: Batch number for file naming
+        chunk_ids: List of item IDs to process
+        rate_limit: Rate limit per worker
+        max_workers: Concurrent workers per process
+        batch_dir: Directory to write batch file
+        use_progress_tracking: Whether to track progress
+        progress_file: Path to progress tracking file
+    
+    Returns:
+        Tuple of (batch_num, num_items, num_items_processed)
+    """
+    # Each process needs its own event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        # Setup progress tracker if needed
+        tracker = ProgressTracker(progress_file) if use_progress_tracking else None
+        
+        def progress_callback(item_id: int, success: bool) -> None:
+            if tracker:
+                if success:
+                    tracker.mark_completed(item_id)
+                else:
+                    tracker.mark_failed(item_id)
+                tracker.save()
+        
+        # Fetch enriched items for this chunk
+        async def fetch_chunk():
+            async with EnrichedItemDataFetcher(
+                rate_limit=rate_limit,
+                max_concurrent=max_workers,
+            ) as fetcher:
+                return await fetcher.fetch_multiple_items(
+                    chunk_ids,
+                    progress_callback=progress_callback if use_progress_tracking else None,
+                )
+        
+        chunk_items = loop.run_until_complete(fetch_chunk())
+        
+        # Transform and write batch file
+        if chunk_items:
+            df_batch = transform_enriched_item_data(chunk_items)
+            if not df_batch.empty:
+                batch_file = batch_dir / f"batch_{batch_num:05d}.parquet"
+                batch_row_count = write_batch_parquet(df_batch, batch_file)
+                logger.info(
+                    f"[Process {os.getpid()}] Batch {batch_num}: {batch_row_count} items from {len(chunk_ids)} requests"
+                )
+                return (batch_num, batch_row_count, len(chunk_ids))
+        
+        return (batch_num, 0, len(chunk_ids))
+        
+    finally:
+        loop.close()
 
 
 # =============================================================================
@@ -571,82 +713,89 @@ async def scrape_enriched_items(
             return pd.read_parquet(output_file)
         return pd.DataFrame()
 
-    # Setup output file
+    # Setup output file and batch directory
     if output_file is None:
         output_file = config.ENRICHED_ITEM_PROCESSED_OUTPUT_DIR / config.ENRICHED_ITEM_DATA_FILENAME
     output_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Create temporary directory for batch files
+    batch_dir = output_file.parent / ".batches"
+    batch_dir.mkdir(exist_ok=True)
 
-    # Setup progress callback
-    def progress_callback(item_id: int, success: bool) -> None:
-        if tracker:
-            if success:
-                tracker.mark_completed(item_id)
-            else:
-                tracker.mark_failed(item_id)
-            tracker.save()
+    # Determine number of CPU cores to use
+    num_cores = max(1, os.cpu_count() - 2) if os.cpu_count() else 1
+    logger.info(f"Using {num_cores} CPU cores for parallel processing")
 
-    # Process items in concurrent chunks with periodic writes to balance speed and memory
+    # Split work into chunks
+    chunks = []
+    for chunk_start in range(0, len(item_ids), batch_size):
+        chunk_ids = item_ids[chunk_start : chunk_start + batch_size]
+        chunk_num = chunk_start // batch_size + 1
+        chunks.append((chunk_num, chunk_ids))
+    
+    total_chunks = len(chunks)
     logger.info(
         f"Starting to scrape enriched data from {len(item_ids)} items "
-        f"(max {max_workers} concurrent, write every {batch_size} items)..."
+        f"({total_chunks} batches, {max_workers} workers per batch, "
+        f"{num_cores} parallel processes)..."
     )
 
     total_items_scraped = 0
     items_processed = 0
-    accumulated_items = []
+    batch_files_written = []
 
-    # Process in chunks
-    for chunk_start in range(0, len(item_ids), batch_size):
-        chunk_ids = item_ids[chunk_start : chunk_start + batch_size]
-        chunk_num = chunk_start // batch_size + 1
-        total_chunks = (len(item_ids) + batch_size - 1) // batch_size
+    # Get progress file path for workers
+    progress_file = config.ENRICHED_ITEM_PROGRESS_FILE if use_progress_tracking else None
 
-        logger.info(
-            f"Processing chunk {chunk_num}/{total_chunks} with {len(chunk_ids)} items "
-            f"(progress: {items_processed}/{len(item_ids)})"
-        )
-
-        # Fetch enriched data for this chunk with concurrency
-        async with EnrichedItemDataFetcher(
-            rate_limit=rate_limit,
-            max_concurrent=max_workers,
-        ) as fetcher:
-            chunk_items = await fetcher.fetch_multiple_items(
+    # Process batches in parallel across CPU cores
+    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        # Submit all batch jobs to the pool
+        future_to_batch = {}
+        for chunk_num, chunk_ids in chunks:
+            future = executor.submit(
+                _process_batch_worker,
+                chunk_num,
                 chunk_ids,
-                progress_callback=progress_callback if use_progress_tracking else None,
+                rate_limit,
+                max_workers,
+                batch_dir,
+                use_progress_tracking,
+                progress_file,
             )
-
-        # Add to accumulated items
-        accumulated_items.extend(chunk_items)
-        items_processed += len(chunk_ids)
-
-        logger.info(
-            f"Chunk {chunk_num} fetched {len(chunk_items)} items. "
-            f"Accumulated: {len(accumulated_items)} items"
-        )
-
-        # Write accumulated items to disk and clear memory
-        if accumulated_items:
-            df_batch = transform_enriched_item_data(accumulated_items)
-
-            if not df_batch.empty:
-                total_items_scraped = append_to_parquet_efficient(df_batch, output_file)
+            future_to_batch[future] = (chunk_num, len(chunk_ids))
+        
+        # Process results as they complete
+        for future in as_completed(future_to_batch):
+            chunk_num, num_items = future_to_batch[future]
+            try:
+                batch_num, num_rows, items_in_batch = future.result()
+                total_items_scraped += num_rows
+                items_processed += items_in_batch
+                
+                if num_rows > 0:
+                    batch_files_written.append(batch_dir / f"batch_{batch_num:05d}.parquet")
+                
                 logger.info(
-                    f"Saved chunk {chunk_num}. Total in file: {total_items_scraped:,} items"
+                    f"Completed batch {batch_num}/{total_chunks}: "
+                    f"{num_rows} items, Progress: {items_processed}/{len(item_ids)} items "
+                    f"(Total: {total_items_scraped:,} items)"
                 )
+            except Exception as e:
+                logger.error(f"Batch {chunk_num} failed with error: {e}")
 
-            # Clear memory
-            del df_batch
-            del accumulated_items
-            del chunk_items
-            accumulated_items = []  # Reset for next chunk
-
-        logger.info(
-            f"Progress: {items_processed}/{len(item_ids)} items complete"
-        )
-
-    # Load final result
-    if output_file.exists():
+    # Merge all batch files into final output file
+    if batch_files_written:
+        logger.info(f"Merging {len(batch_files_written)} batch files...")
+        total_rows = merge_batch_parquets(batch_dir, output_file)
+        
+        # Clean up batch directory
+        try:
+            batch_dir.rmdir()
+            logger.debug(f"Removed batch directory {batch_dir}")
+        except Exception as e:
+            logger.warning(f"Could not remove batch directory: {e}")
+        
+        # Load and return final result
         df = pd.read_parquet(output_file)
         logger.info(f"Final dataset: {len(df)} records saved to {output_file}")
         return df

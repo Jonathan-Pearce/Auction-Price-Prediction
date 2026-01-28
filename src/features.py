@@ -144,6 +144,10 @@ def preprocess_text(text: str) -> str:
 
     # Basic preprocessing
     text = str(text).lower().strip()
+    
+    # Normalize whitespace
+    import re
+    text = re.sub(r'\s+', ' ', text)
 
     # TODO: Add more sophisticated preprocessing
     # - Remove HTML tags
@@ -153,32 +157,183 @@ def preprocess_text(text: str) -> str:
     return text
 
 
+def extract_handcrafted_text_features(text: str) -> dict[str, Any]:
+    """
+    Extract hand-crafted features from item description text.
+    
+    These features are fast to compute and interpretable,
+    making them ideal for tabular models and quick inference.
+    
+    Args:
+        text: Item description text
+        
+    Returns:
+        Dictionary of numeric features
+    """
+    import re
+    
+    if not text or pd.isna(text):
+        text = ""
+    
+    features = {}
+    
+    # Basic length features
+    features['text_char_count'] = len(text)
+    features['text_word_count'] = len(text.split())
+    features['text_sentence_count'] = len(re.split(r'[.!?]+', text))
+    features['text_avg_word_length'] = (
+        features['text_char_count'] / max(features['text_word_count'], 1)
+    )
+    
+    # Lexical features
+    features['text_uppercase_ratio'] = (
+        sum(c.isupper() for c in text) / max(len(text), 1)
+    )
+    features['text_digit_count'] = sum(c.isdigit() for c in text)
+    features['text_punctuation_count'] = sum(c in '.,!?;:' for c in text)
+    
+    # Auction-specific keyword presence
+    text_lower = text.lower()
+    
+    # Brand/authenticity keywords
+    brand_keywords = ['authentic', 'original', 'genuine', 'branded', 'signed']
+    features['text_brand_keyword_count'] = sum(word in text_lower for word in brand_keywords)
+    features['text_has_brand_keywords'] = int(any(word in text_lower for word in brand_keywords))
+    
+    # Condition keywords
+    condition_keywords = ['mint', 'excellent', 'good', 'fair', 'poor', 'damaged', 'worn', 'new']
+    features['text_condition_keyword_count'] = sum(word in text_lower for word in condition_keywords)
+    features['text_has_condition_keywords'] = int(any(word in text_lower for word in condition_keywords))
+    
+    # Quality/collectibility keywords
+    quality_keywords = ['rare', 'vintage', 'antique', 'collectible', 'limited', 'unique', 'classic']
+    features['text_quality_keyword_count'] = sum(word in text_lower for word in quality_keywords)
+    features['text_has_quality_keywords'] = int(any(word in text_lower for word in quality_keywords))
+    
+    # Material keywords
+    material_keywords = ['wood', 'metal', 'glass', 'ceramic', 'plastic', 'leather', 'silver', 'gold']
+    features['text_material_keyword_count'] = sum(word in text_lower for word in material_keywords)
+    features['text_has_material_keywords'] = int(any(word in text_lower for word in material_keywords))
+    
+    return features
+
+
 def extract_text_features(
     texts: list[str],
     method: str = "tfidf",
-) -> Any:
+    vectorizer: Any = None,
+    max_features: int = 300,
+) -> tuple[Any, Any]:
     """
     Extract features from text data.
 
     Methods:
-    - 'tfidf': TF-IDF vectorization
-    - 'embeddings': Pretrained embeddings (BERT, etc.)
-    - 'bow': Bag of words
+    - 'tfidf': TF-IDF vectorization (sparse, fast)
+    - 'embeddings': Pretrained sentence embeddings (dense, semantic)
+    - 'bow': Bag of words (sparse, fast)
+    - 'handcrafted': Hand-crafted features (fast, interpretable)
 
     Args:
         texts: List of text strings
         method: Feature extraction method
+        vectorizer: Pre-fitted vectorizer (for tfidf/bow), will fit if None
+        max_features: Maximum features for tfidf/bow
 
     Returns:
-        Feature matrix or embeddings
+        Tuple of (features, vectorizer/model) where:
+        - features: Feature matrix or embeddings
+        - vectorizer/model: Fitted vectorizer or model for future use
     """
     logger.info(f"Extracting text features using {method}...")
+    
+    # Preprocess texts
+    texts = [preprocess_text(text) for text in texts]
 
-    # TODO: Implement text feature extraction
-    # For 'embeddings', use transformers library
-    # For 'tfidf', use sklearn TfidfVectorizer
-
-    raise NotImplementedError(f"Text feature extraction ({method}) not yet implemented")
+    if method == "tfidf":
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        
+        if vectorizer is None:
+            # Adjust min_df based on dataset size
+            min_doc_freq = max(1, min(5, len(texts) // 10))
+            
+            vectorizer = TfidfVectorizer(
+                max_features=max_features,
+                min_df=min_doc_freq,  # Adjust based on corpus size
+                max_df=0.9,  # More lenient for small datasets
+                ngram_range=(1, 2),  # Unigrams and bigrams
+                stop_words='english' if len(texts) > 10 else None,  # Skip stopwords for tiny datasets
+                lowercase=True,
+                strip_accents='unicode',
+            )
+            features = vectorizer.fit_transform(texts)
+        else:
+            features = vectorizer.transform(texts)
+        
+        return features, vectorizer
+    
+    elif method == "bow":
+        from sklearn.feature_extraction.text import CountVectorizer
+        
+        if vectorizer is None:
+            # Adjust min_df based on dataset size
+            min_doc_freq = max(1, min(5, len(texts) // 10))
+            
+            vectorizer = CountVectorizer(
+                max_features=max_features,
+                min_df=min_doc_freq,  # Adjust based on corpus size
+                max_df=0.9,  # More lenient for small datasets
+                ngram_range=(1, 2),
+                stop_words='english' if len(texts) > 10 else None,  # Skip stopwords for tiny datasets
+                lowercase=True,
+                binary=False,  # Count occurrences
+            )
+            features = vectorizer.fit_transform(texts)
+        else:
+            features = vectorizer.transform(texts)
+        
+        return features, vectorizer
+    
+    elif method == "embeddings":
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            logger.error(
+                "sentence-transformers not installed. "
+                "Install with: pip install sentence-transformers"
+            )
+            raise
+        
+        # Use pre-trained model if not provided
+        if vectorizer is None:
+            # Use fast, high-quality model (384 dimensions)
+            model = SentenceTransformer('all-MiniLM-L6-v2')
+            model.eval()
+        else:
+            model = vectorizer
+        
+        # Generate embeddings
+        import numpy as np
+        features = model.encode(
+            texts,
+            batch_size=32,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        )
+        
+        return features, model
+    
+    elif method == "handcrafted":
+        # Extract hand-crafted features
+        features_list = [extract_handcrafted_text_features(text) for text in texts]
+        features = pd.DataFrame(features_list)
+        
+        return features, None
+    
+    else:
+        raise ValueError(
+            f"Unknown method '{method}'. "
+            f"Choose from: 'tfidf', 'bow', 'embeddings', 'handcrafted'"
+        )
 
 
 # =============================================================================

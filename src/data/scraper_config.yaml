@@ -103,6 +103,52 @@ fields:
   # Prefix for item columns
   item_column_prefix: "item_"
   
+  # Enriched item fields to extract from API response
+  enriched_item_fields:
+    - amLotId
+    - amAuctionId
+  
+  # Nested enriched item fields (stored as JSON strings)
+  enriched_item_json_fields:
+    - brands
+    - categories
+    - items
+    - attributes
+    - photosTaken
+  
+  # Fields extracted from the generatedDescription object
+  enriched_item_generated_description_fields:
+    - title
+    - slug
+    - description
+    - qualitativeDescription
+    - brand
+    - seriesLine
+    - condition
+    - working
+    - singleKeyItem
+    - numItems
+  
+  # Enriched item field name mappings (old_name: new_name)
+  enriched_item_field_rename_map:
+    amLotId: item_id
+    amAuctionId: auction_id
+  
+  # Prefix for enriched item columns
+  enriched_item_column_prefix: "enriched_item_"
+  # Bid-level fields to extract from API response
+  bid_fields:
+    - time_of_bid
+    - amount
+    - isproxy
+  
+  # Bid field name mappings (old_name: new_name)
+  bid_field_rename_map:
+    time_of_bid: time
+    isproxy: is_proxy
+  
+  # Prefix for bid columns (exception: auction_id and item_id)
+  bid_column_prefix: "bid_"
   # Prefix for enriched auction columns (except auction_id and item_id)
   enriched_auction_column_prefix: "enriched_auction_"
 
@@ -118,6 +164,9 @@ storage:
     # Hugging Face dataset for auction IDs
     hf_dataset_repo: "jpearce610/auction_data"
     hf_auction_id_column: "auction_id"
+    # Hugging Face dataset for item IDs (enriched item scraper)
+    hf_item_dataset_repo: "jpearce610/item_data"
+    hf_item_id_column: "item_id"
   
   # Output data
   output:
@@ -127,6 +176,12 @@ storage:
     item_raw_directory: "data/raw/items"
     item_processed_directory: "data/processed/items"
     item_data_filename: "item_data.parquet"
+    enriched_item_raw_directory: "data/raw/enriched_items"
+    enriched_item_processed_directory: "data/processed/enriched_items"
+    enriched_item_data_filename: "enriched_item_data.parquet"
+    bid_raw_directory: "data/raw/bids"
+    bid_processed_directory: "data/processed/bids"
+    bid_data_filename: "bid_data.parquet"
     enriched_auction_raw_directory: "data/raw/enriched_auctions"
     enriched_auction_processed_directory: "data/processed/enriched_auctions"
     enriched_auction_data_filename: "enriched_auction_data.parquet"
@@ -139,6 +194,13 @@ storage:
   progress:
     filename: "scraper_progress.json"
     item_progress_filename: "item_scraper_progress.json"
+    enriched_item_progress_filename: "enriched_item_scraper_progress.json"
+    bid_progress_filename: "bid_scraper_progress.json"
+  
+  # Hugging Face datasets
+  hf_datasets:
+    item_data_repo: "jpearce610/item_data"
+    item_id_column: "item_id"
     enriched_auction_progress_filename: "enriched_auction_scraper_progress.json"
     image_progress_filename: "image_scraper_progress.json"
 
@@ -195,6 +257,14 @@ huggingface:
     - item_data.parquet
     - metadata.json
   
+  # Enriched item dataset metadata
+  enriched_item_dataset:
+    name: "maxsold-enriched-item-data"
+    description: "MaxSold enriched item data with detailed item attributes, brands, categories, and metadata"
+  # Bid dataset metadata
+  bid_dataset:
+    name: "maxsold-bid-data"
+    description: "MaxSold auction bid history data with bid timing and amounts"
   # Enriched auction dataset metadata
   enriched_auction_dataset:
     name: "maxsold-enriched-auction-data"
@@ -205,6 +275,18 @@ huggingface:
       - price-prediction
       - e-commerce
       - maxsold
+      - enriched-items
+      - item-attributes
+  
+  # Enriched item files to upload
+  enriched_item_upload_files:
+    - enriched_item_data.parquet
+      - bids
+      - bid-history
+  
+  # Bid files to upload
+  bid_upload_files:
+    - bid_data.parquet
       - enriched
       - location
   

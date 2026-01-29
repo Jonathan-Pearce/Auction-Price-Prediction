@@ -125,6 +125,24 @@ def normalize_features(
     method = norm_config.method
     params = scaler_params or {}
 
+    # Validate scaler_params when fit=False (inference mode)
+    if not fit:
+        if not scaler_params:
+            raise ValueError(
+                "scaler_params must be provided when fit=False (inference mode)"
+            )
+        required_keys = {
+            "standard": ["mean", "std"],
+            "minmax": ["min", "max"],
+            "robust": ["median", "iqr"],
+        }
+        if method in required_keys:
+            missing_keys = [k for k in required_keys[method] if k not in scaler_params]
+            if missing_keys:
+                raise ValueError(
+                    f"scaler_params missing required keys for {method} method: {missing_keys}"
+                )
+
     if method == "standard":
         # Z-score normalization: (x - mean) / std
         if fit:
@@ -288,9 +306,14 @@ def prepare_tabular_dataset(
     features_df = select_features(features_df, config)
 
     # Build metadata
+    # Count non-feature columns (identifiers and target)
+    non_feature_cols = ["auction_id", "item_id", "winning_price"]
+    n_feature_cols = len(
+        [col for col in features_df.columns if col not in non_feature_cols]
+    )
     metadata = {
         "n_items": len(features_df),
-        "n_features": len(features_df.columns) - 2,  # Exclude item_id, auction_id
+        "n_features": n_feature_cols,
         "feature_names": extractor.get_feature_names(),
         "feature_metadata": extractor.get_feature_metadata(),
         "scaler_params": scaler_params,

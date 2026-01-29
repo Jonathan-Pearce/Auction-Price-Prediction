@@ -15,14 +15,14 @@ from src.feature_engineering.bid_features import (
 )
 from src.feature_engineering.feature_config import (
     FeatureConfig,
-    load_feature_config,
     get_config_value,
+    load_feature_config,
 )
 from src.feature_engineering.preprocessing import (
+    get_feature_target_split,
     handle_missing_values,
     normalize_features,
     select_features,
-    get_feature_target_split,
 )
 
 # =============================================================================
@@ -332,6 +332,46 @@ def test_normalize_features_disabled():
     assert result["feature1"].iloc[0] == 10.0
     assert result["feature1"].iloc[1] == 20.0
     assert params == {}
+
+
+def test_normalize_features_inference_mode_requires_params():
+    """Test that inference mode requires scaler_params."""
+    df = pd.DataFrame(
+        {
+            "auction_id": [1, 2],
+            "item_id": [101, 102],
+            "feature1": [10.0, 20.0],
+        }
+    )
+
+    config = load_feature_config()
+    config.preprocessing.normalization.enabled = True
+    config.preprocessing.normalization.method = "standard"
+
+    # Should raise error when fit=False and no scaler_params
+    with pytest.raises(ValueError, match="scaler_params must be provided"):
+        normalize_features(df, config, fit=False, scaler_params=None)
+
+
+def test_normalize_features_inference_mode_validates_keys():
+    """Test that inference mode validates required keys in scaler_params."""
+    df = pd.DataFrame(
+        {
+            "auction_id": [1, 2],
+            "item_id": [101, 102],
+            "feature1": [10.0, 20.0],
+        }
+    )
+
+    config = load_feature_config()
+    config.preprocessing.normalization.enabled = True
+    config.preprocessing.normalization.method = "standard"
+
+    # Missing 'std' key
+    incomplete_params = {"mean": {"feature1": 15.0}}
+
+    with pytest.raises(ValueError, match="missing required keys"):
+        normalize_features(df, config, fit=False, scaler_params=incomplete_params)
 
 
 def test_select_features_zero_variance():

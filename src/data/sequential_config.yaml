@@ -1,0 +1,159 @@
+# =============================================================================
+# Sequential Model Feature Engineering Configuration
+# =============================================================================
+# This YAML file contains all configuration parameters for sequential deep
+# learning models (LSTM/GRU) to predict auction winning prices from bid data.
+# Data is loaded from Hugging Face: https://huggingface.co/datasets/jpearce610/bid_data
+
+# =============================================================================
+# Data Source Configuration
+# =============================================================================
+data_source:
+  # Hugging Face dataset for bid data
+  hf_dataset_repo: "jpearce610/bid_data"
+  hf_dataset_split: "train"  # Default split to load
+  streaming: false  # Whether to stream the dataset
+
+# =============================================================================
+# Sequence Configuration
+# =============================================================================
+sequence:
+  # Maximum sequence length (number of bids per item)
+  max_length: 100
+  # Minimum sequence length (items with fewer bids are excluded)
+  min_length: 1
+  # Padding strategy: 'pre' (pad at start) or 'post' (pad at end)
+  padding_strategy: "post"
+  # Truncation strategy: 'pre' (keep last N bids) or 'post' (keep first N bids)
+  truncation_strategy: "pre"  # Keep most recent bids
+  # Padding value for bid amounts and numeric features
+  padding_value: 0.0
+  # Whether to include items with no bids (label = 0)
+  include_zero_bid_items: false
+
+# =============================================================================
+# Feature Configuration - Per Bid Features
+# =============================================================================
+features:
+  # Features to extract per bid in the sequence
+  per_bid:
+    # Raw bid amount
+    bid_amount:
+      enabled: true
+      normalize: true
+      normalization_method: "minmax"  # minmax, standard, log, none
+    
+    # Time since previous bid (in seconds)
+    time_since_previous_bid:
+      enabled: true
+      normalize: true
+      normalization_method: "log"  # Log transform for time values
+      clip_max: 86400  # Clip to max 1 day (in seconds)
+    
+    # Relative bid amount (vs starting bid)
+    relative_bid_amount:
+      enabled: true
+      normalize: true
+      normalization_method: "minmax"
+    
+    # Bid increment (current bid - previous bid)
+    bid_increment:
+      enabled: true
+      normalize: true
+      normalization_method: "minmax"
+    
+    # Bid position in sequence (normalized 0-1)
+    bid_position:
+      enabled: true
+      normalize: false  # Already normalized by design
+    
+    # Cumulative bid count at this point
+    cumulative_bid_count:
+      enabled: true
+      normalize: true
+      normalization_method: "minmax"
+    
+    # Is this a proxy bid
+    is_proxy:
+      enabled: true
+      normalize: false  # Binary feature
+  
+  # Sequence-level / static features (appended to each timestep or used separately)
+  sequence_level:
+    # Total number of bids in sequence
+    total_bids:
+      enabled: true
+      normalize: true
+      normalization_method: "log"
+    
+    # Starting bid for the item (if available)
+    starting_bid:
+      enabled: false  # May not be in bid dataset
+      normalize: true
+      normalization_method: "minmax"
+
+# =============================================================================
+# Label Configuration
+# =============================================================================
+label:
+  # What to use as the prediction target
+  target: "final_bid"  # final_bid or winning_price
+  # Handle missing labels
+  missing_strategy: "exclude"  # exclude, zero, mean
+
+# =============================================================================
+# Preprocessing Configuration
+# =============================================================================
+preprocessing:
+  # Handle missing data in features
+  missing_values:
+    strategy: "zero"  # zero, mean, median, forward_fill, mask
+    create_mask: true  # Create a mask tensor for missing values
+  
+  # Time parsing
+  time:
+    format: "%Y-%m-%dT%H:%M:%S"
+    timezone: "UTC"
+
+# =============================================================================
+# Normalization Configuration
+# =============================================================================
+normalization:
+  # Whether to fit normalizers on training data only
+  fit_on_train_only: true
+  # Path to save/load normalization statistics
+  stats_file: "normalization_stats.json"
+  # Min-max normalization range
+  minmax_range: [0.0, 1.0]
+  # Standard normalization (z-score) parameters
+  standard:
+    center: true
+    scale: true
+
+# =============================================================================
+# Data Splitting Configuration
+# =============================================================================
+splitting:
+  # Train/validation/test split ratios
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  # Random seed for reproducibility
+  random_seed: 42
+  # Stratification column (if any)
+  stratify_by: null  # Could be auction_id for per-auction splits
+  # Time-based splitting (recommended for auctions)
+  time_based: false
+  time_column: "bid_time"
+
+# =============================================================================
+# PyTorch DataLoader Configuration
+# =============================================================================
+dataloader:
+  batch_size: 32
+  shuffle_train: true
+  shuffle_val: false
+  shuffle_test: false
+  num_workers: 4
+  pin_memory: true
+  drop_last: false

@@ -20,7 +20,6 @@ from loguru import logger
 
 from src.config import settings
 
-
 # =============================================================================
 # Base Trainer
 # =============================================================================
@@ -163,6 +162,69 @@ class ImageTrainer(BaseTrainer):
         save_path = path or self.output_dir / "image_model.pt"
         logger.info(f"Saving image model to {save_path}")
         # TODO: Save PyTorch model
+
+
+# =============================================================================
+# Image Embeddings Model Trainer
+# =============================================================================
+
+
+class ImageEmbeddingsTrainerWrapper(BaseTrainer):
+    """
+    Wrapper trainer for image embeddings-based model.
+
+    Uses pre-computed image embeddings (576-dim from MobileNetV3)
+    with a neural network for price prediction.
+    """
+
+    def __init__(self, **kwargs: Any):
+        super().__init__(model_name="image_embeddings", **kwargs)
+        self._trainer = None
+        self._data = None
+
+    def load_data(self) -> None:
+        from src.modeling.image_embeddings import ImageEmbeddingsTrainer
+
+        logger.info("Loading image embeddings training data from HuggingFace...")
+        self._trainer = ImageEmbeddingsTrainer(output_dir=self.output_dir)
+        embeddings_df, items_df = self._trainer.load_data_from_huggingface()
+        self._data = self._trainer.prepare_data(embeddings_df, items_df)
+
+    def build_model(self) -> None:
+        logger.info("Building image embeddings model...")
+        if self._trainer is not None:
+            self.model = self._trainer.build_model()
+
+    def train(self) -> dict[str, float]:
+        logger.info("Training image embeddings model...")
+        if self._trainer is None or self._data is None:
+            raise RuntimeError("Must call load_data() and build_model() first")
+
+        X_train, X_val, X_test, y_train, y_val, y_test = self._data
+        history = self._trainer.train(X_train, y_train, X_val, y_val)
+
+        return {
+            "train_loss": history["train_loss"][-1] if history["train_loss"] else 0.0,
+            "val_loss": history["val_loss"][-1] if history["val_loss"] else 0.0,
+            "val_mae": history["val_mae"][-1] if history["val_mae"] else 0.0,
+        }
+
+    def evaluate(self) -> dict[str, float]:
+        logger.info("Evaluating image embeddings model on test set...")
+        if self._trainer is None or self._data is None:
+            raise RuntimeError("Must call load_data() and train() first")
+
+        # Load best model for evaluation
+        self._trainer.load()
+
+        X_train, X_val, X_test, y_train, y_val, y_test = self._data
+        return self._trainer.evaluate(X_test, y_test)
+
+    def save(self, path: Path | None = None) -> None:
+        save_path = path or self.output_dir / "image_embeddings_model.pt"
+        logger.info(f"Saving image embeddings model to {save_path}")
+        if self._trainer is not None:
+            self._trainer.save(save_path)
 
 
 # =============================================================================
@@ -368,11 +430,21 @@ def train_all_models(
 
 def main() -> None:
     """Main entry point for training script."""
-    parser = argparse.ArgumentParser(description="Train auction price prediction models")
+    parser = argparse.ArgumentParser(
+        description="Train auction price prediction models"
+    )
     parser.add_argument(
         "--model",
         type=str,
-        choices=["tabular", "image", "text", "sequential", "fusion", "all"],
+        choices=[
+            "tabular",
+            "image",
+            "image_embeddings",
+            "text",
+            "sequential",
+            "fusion",
+            "all",
+        ],
         default="all",
         help="Model to train",
     )
@@ -412,6 +484,7 @@ def main() -> None:
         trainer_map = {
             "tabular": TabularTrainer,
             "image": ImageTrainer,
+            "image_embeddings": ImageEmbeddingsTrainerWrapper,
             "text": TextTrainer,
             "sequential": SequentialTrainer,
             "fusion": FusionTrainer,

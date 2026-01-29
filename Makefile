@@ -138,6 +138,11 @@ train-image:  ## Train image model only
 	$(PYTHON) -m src.modeling.train --model image
 	@echo "$(GREEN)Image model training complete!$(NC)"
 
+train-image-embeddings:  ## Train image embeddings model only
+	@echo "$(BLUE)Training image embeddings model...$(NC)"
+	$(PYTHON) -m src.modeling.image_embeddings
+	@echo "$(GREEN)Image embeddings model training complete!$(NC)"
+
 train-text:  ## Train text model only
 	@echo "$(BLUE)Training text model...$(NC)"
 	$(PYTHON) -m src.modeling.train --model text

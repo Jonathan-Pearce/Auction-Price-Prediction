@@ -1,0 +1,141 @@
+# =============================================================================
+# Feature Engineering Configuration
+# =============================================================================
+# This YAML file contains all configuration parameters for feature engineering.
+# Used for preparing bid data for tabular ML models (e.g., XGBoost).
+# =============================================================================
+
+# =============================================================================
+# Data Source Configuration
+# =============================================================================
+data_source:
+  # Hugging Face dataset repository
+  hf_dataset_repo: "jpearce610/bid_data"
+  # Dataset split to use (train, test, or None for all)
+  split: null
+  # Whether to stream the dataset (memory efficient for large datasets)
+  streaming: false
+  # Optional: limit number of rows for development/testing
+  dev_limit: null
+
+# =============================================================================
+# Feature Engineering Configuration
+# =============================================================================
+features:
+  # Target/label column settings
+  target:
+    # Column name for the target variable (derived as max bid amount per item)
+    name: "winning_price"
+    # How to derive the target from bids (max, last, etc.)
+    aggregation: "max"
+
+  # Bid amount aggregation features
+  bid_amount:
+    enabled: true
+    # List of statistics to compute on bid amounts per item
+    statistics:
+      - max      # Winning price (target)
+      - min      # Minimum bid
+      - mean     # Average bid
+      - median   # Median bid
+      - std      # Standard deviation of bids
+    # Additional derived features
+    derived:
+      - range         # max - min
+      - coefficient_of_variation  # std / mean
+
+  # Bid count features
+  bid_count:
+    enabled: true
+    features:
+      - total_bids          # Total number of bids
+      - unique_bidders_proxy  # Approximation based on bid patterns (proxy bids indicate different bidders)
+
+  # Time-based features
+  time_features:
+    enabled: true
+    features:
+      - bidding_duration_seconds    # Time between first and last bid
+      - first_last_bid_delta        # Same as above (alias)
+      - mean_time_between_bids      # Average gap between consecutive bids
+      - median_time_between_bids    # Median gap between consecutive bids
+
+  # Distribution/concentration features
+  distribution_features:
+    enabled: true
+    features:
+      - bid_concentration_last_25pct  # Fraction of bids in last 25% of duration
+      - bid_concentration_last_10pct  # Fraction of bids in last 10% of duration
+    # Last N bids features
+    last_n_bids:
+      enabled: true
+      n_values: [3, 5, 10]  # Compute features for last 3, 5, and 10 bids
+      features:
+        - mean_amount
+        - amount_growth_rate  # Average increment between bids
+
+  # Proxy bid features (indicates automated bidding)
+  proxy_features:
+    enabled: true
+    features:
+      - proxy_bid_count      # Number of proxy bids
+      - proxy_bid_ratio      # Fraction of bids that are proxy bids
+
+# =============================================================================
+# Preprocessing Configuration
+# =============================================================================
+preprocessing:
+  # Missing value handling
+  missing_values:
+    # Strategy for numeric features: mean, median, zero, or constant
+    numeric_strategy: "zero"
+    # Fill value if strategy is "constant"
+    fill_value: 0.0
+    # Create indicator columns for missing values
+    create_indicators: true
+
+  # Feature normalization/standardization
+  normalization:
+    enabled: false
+    # Method: standard (z-score), minmax, robust, or none
+    method: "standard"
+    # Features to exclude from normalization
+    exclude_features:
+      - "item_id"
+      - "auction_id"
+      - "winning_price"
+
+  # Feature selection
+  feature_selection:
+    # Remove features with zero variance
+    remove_zero_variance: true
+    # Remove highly correlated features (correlation > threshold)
+    remove_highly_correlated: false
+    correlation_threshold: 0.95
+
+# =============================================================================
+# Output Configuration
+# =============================================================================
+output:
+  # Output file format: parquet, csv, or feather
+  format: "parquet"
+  # Output directory (relative to project root)
+  directory: "data/processed/features"
+  # Output filename
+  filename: "tabular_features.parquet"
+  # Include metadata file with feature descriptions
+  include_metadata: true
+  metadata_filename: "feature_metadata.json"
+
+# =============================================================================
+# Processing Configuration
+# =============================================================================
+processing:
+  # Batch size for processing (number of items per batch)
+  batch_size: 10000
+  # Number of workers for parallel processing (0 = single-threaded)
+  n_workers: 0
+  # Show progress bar
+  show_progress: true
+  # Random seed for reproducibility
+  random_seed: 42

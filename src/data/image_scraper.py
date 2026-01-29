@@ -119,14 +119,14 @@ class ImageEmbeddingExtractor:
         # Create session from modified model with optimized settings
         model_bytes = model.SerializeToString()
         
-        # Configure session options for better performance
+        # Configure session options for balanced performance/CPU usage
         sess_options = ort.SessionOptions()
-        # Limit to 8 cores max for CPU efficiency
-        max_threads = min(8, os.cpu_count() or 4)
+        # Limit to 4 cores max for CPU efficiency (reduce from 8 to lower CPU usage)
+        max_threads = min(4, os.cpu_count() or 4)
         sess_options.intra_op_num_threads = max_threads  # Threads per operation
         sess_options.inter_op_num_threads = max_threads  # Threads between operations
-        sess_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL  # Sequential mode uses less CPU
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
         
         self._session = ort.InferenceSession(
             model_bytes,
@@ -171,7 +171,8 @@ class ImageEmbeddingExtractor:
                 scale = target_max / max_dim
                 new_w = int(w * scale)
                 new_h = int(h * scale)
-                img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                # Use INTER_LINEAR instead of INTER_AREA for lower CPU usage
+                img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
             # Pad to target size (center padding)
             h, w = img.shape[:2]
@@ -413,8 +414,6 @@ class ImageDataFetcher:
         Returns:
             Image bytes or None if failed
         """
-        await self._rate_limit()
-
         try:
             response = await self.client.get(image_url)
             response.raise_for_status()
@@ -498,13 +497,13 @@ class ImageDataFetcher:
 
             logger.debug(f"Successfully processed image: item {record.get('item_id')}, index {record.get('image_index')}")
             
-            # Return record with embedding
+            # Return record with embedding (convert to float32 for space efficiency)
             return {
                 "auction_id": record["auction_id"],
                 "item_id": record["item_id"],
                 "image_index": record["image_index"],
                 "image_url": image_url,
-                "embedding": embedding.tolist(),
+                "embedding": embedding.astype('float32'),
             }
 
         except Exception as e:
@@ -705,11 +704,20 @@ def transform_image_data(records: list[dict[str, Any]]) -> pd.DataFrame:
         "auction_id": "auction_id",  # Keep as-is
         "item_id": "item_id",  # Keep as-is
         "image_index": "image_index",
-        "image_url": "image_url",
         "embedding": "image_embedding",
     }
 
     df = df.rename(columns=column_rename)
+    
+    # Remove image_url column to save space (URLs not needed in storage)
+    if 'image_url' in df.columns:
+        df = df.drop(columns=['image_url'])
+    
+    # Ensure embeddings are float32 numpy arrays (not lists or float64)
+    if 'image_embedding' in df.columns:
+        df['image_embedding'] = df['image_embedding'].apply(
+            lambda x: np.array(x, dtype=np.float32) if not isinstance(x, np.ndarray) or x.dtype != np.float32 else x
+        )
 
     logger.info(f"Transformed {len(df)} image records")
     return df
@@ -1025,15 +1033,17 @@ async def scrape_images(
                 tracker.mark_failed(auction_id)
             tracker.save()
 
-    # Determine optimal process count
+    # Determine optimal process count for balanced CPU usage
+    # Default to 2 processes to reduce peak CPU load
     if num_processes is None:
-        num_processes = min(4, os.cpu_count() or 4)
+        num_processes = min(2, os.cpu_count() or 2)
     
     # Adjust workers per process to balance total concurrency
-    # Target: num_processes × max_workers ≈ 8 (for 8 CPU cores)
-    if max_workers * num_processes > 8:
-        max_workers = max(2, 8 // num_processes)
-        logger.info(f"Adjusted workers to {max_workers} per process for optimal CPU usage")
+    # Target: num_processes × max_workers ≈ 4-6 (for moderate CPU usage)
+    target_concurrency = 6
+    if max_workers * num_processes > target_concurrency:
+        max_workers = max(2, target_concurrency // num_processes)
+        logger.info(f"Adjusted workers to {max_workers} per process for moderate CPU usage")
     
     logger.info(
         f"Starting to scrape images from {len(auction_ids)} auctions "
@@ -1289,7 +1299,7 @@ def main() -> None:
         "--processes",
         type=int,
         default=None,
-        help=f"Number of parallel processes (default: min(4, CPU count) = {min(4, os.cpu_count() or 4)})",
+        help=f"Number of parallel processes (default: min(2, CPU count) = {min(2, os.cpu_count() or 2)}). Use 1-2 for low CPU, 3-4 for high performance",
     )
     parser.add_argument(
         "--output",

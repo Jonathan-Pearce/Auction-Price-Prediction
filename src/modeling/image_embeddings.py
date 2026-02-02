@@ -77,6 +77,70 @@ class ImageEmbeddingsDataset(Dataset):
         return self.embeddings[idx], self.prices[idx]
 
 
+class StreamingEmbeddingsDataset(torch.utils.data.IterableDataset):
+    """
+    Streaming PyTorch Dataset that loads embeddings in batches from HuggingFace.
+
+    This avoids loading the entire embeddings dataset into memory by streaming
+    batches directly from HuggingFace and joining with pre-loaded item prices.
+    """
+
+    def __init__(
+        self,
+        embeddings_repo: str,
+        item_prices: dict[int, float],
+        embedding_col: str = "image_embedding",
+        item_id_col: str = "item_id",
+        transform_fn: Callable | None = None,
+        shuffle_buffer_size: int = 10000,
+    ):
+        """
+        Initialize the streaming dataset.
+
+        Args:
+            embeddings_repo: HuggingFace repository ID for embeddings dataset
+            item_prices: Dictionary mapping item_id to price
+            embedding_col: Column name for embeddings in the dataset
+            item_id_col: Column name for item IDs
+            transform_fn: Optional function to transform prices (e.g., log1p)
+            shuffle_buffer_size: Size of shuffle buffer for streaming
+        """
+        self.embeddings_repo = embeddings_repo
+        self.item_prices = item_prices
+        self.embedding_col = embedding_col
+        self.item_id_col = item_id_col
+        self.transform_fn = transform_fn
+        self.shuffle_buffer_size = shuffle_buffer_size
+
+    def __iter__(self):
+        from datasets import load_dataset
+
+        # Load dataset in streaming mode
+        dataset = load_dataset(self.embeddings_repo, split="train", streaming=True)
+
+        # Shuffle the stream
+        dataset = dataset.shuffle(buffer_size=self.shuffle_buffer_size)
+
+        for sample in dataset:
+            item_id = sample[self.item_id_col]
+
+            # Skip if item_id not in prices (e.g., filtered out)
+            if item_id not in self.item_prices:
+                continue
+
+            embedding = np.array(sample[self.embedding_col], dtype=np.float32)
+            price = self.item_prices[item_id]
+
+            # Apply transformation
+            if self.transform_fn is not None:
+                price = self.transform_fn(np.array([price]))[0]
+
+            yield (
+                torch.tensor(embedding, dtype=torch.float32),
+                torch.tensor([price], dtype=torch.float32),
+            )
+
+
 # =============================================================================
 # Model Architecture
 # =============================================================================
@@ -309,6 +373,9 @@ class ImageEmbeddingsTrainer:
         """
         Load embeddings and prices from Hugging Face datasets.
 
+        Note: This loads both datasets fully into memory. For large datasets,
+        use load_items_and_create_streaming_pipeline() instead.
+
         Returns:
             Tuple of (embeddings_df, items_df)
         """
@@ -337,6 +404,367 @@ class ImageEmbeddingsTrainer:
         logger.info(f"Loaded {len(embeddings_df)} embeddings and {len(items_df)} items")
 
         return embeddings_df, items_df
+
+    def load_items_dataset(self) -> pd.DataFrame:
+        """
+        Load only the items dataset (contains prices).
+
+        This is memory efficient as the items dataset is much smaller
+        than the embeddings dataset.
+
+        Returns:
+            DataFrame with item data including prices
+        """
+        from datasets import load_dataset
+
+        hf_config = self.config.get("huggingface", {})
+        items_config = hf_config.get("item_data_dataset", {})
+        items_repo = items_config.get("repo_id", "jpearce610/item_data")
+
+        logger.info(f"Loading item data from {items_repo}...")
+        items_ds = load_dataset(items_repo, split="train")
+        items_df = items_ds.to_pandas()
+
+        logger.info(f"Loaded {len(items_df)} items")
+        return items_df
+
+    def create_item_price_lookup(
+        self,
+        items_df: pd.DataFrame,
+        valid_item_ids: set[int] | None = None,
+    ) -> dict[int, float]:
+        """
+        Create a lookup dictionary mapping item_id to price.
+
+        Args:
+            items_df: DataFrame with item data
+            valid_item_ids: Optional set of item IDs to include (for filtering)
+
+        Returns:
+            Dictionary mapping item_id to price
+        """
+        hf_config = self.config.get("huggingface", {})
+        items_config = hf_config.get("item_data_dataset", {})
+
+        item_id_col = items_config.get("item_id_column", "item_id")
+        price_col = items_config.get("price_column", "item_current_bid")
+
+        # Handle zero-bid items
+        handle_zeros = self.target_config.get("handle_zero_bids", "include")
+
+        price_lookup = {}
+        for _, row in items_df.iterrows():
+            item_id = row[item_id_col]
+            price = row[price_col]
+
+            # Skip if not in valid_item_ids (when filtering)
+            if valid_item_ids is not None and item_id not in valid_item_ids:
+                continue
+
+            # Handle zero-bid items
+            if handle_zeros == "exclude" and price == 0:
+                continue
+
+            price_lookup[item_id] = float(price)
+
+        logger.info(f"Created price lookup with {len(price_lookup)} items")
+        return price_lookup
+
+    def get_embedding_item_ids(self) -> set[int]:
+        """
+        Get the set of item IDs that have embeddings by streaming through the dataset.
+
+        This avoids loading the full embeddings dataset into memory.
+
+        Returns:
+            Set of item IDs that have embeddings
+        """
+        from datasets import load_dataset
+
+        hf_config = self.config.get("huggingface", {})
+        embeddings_config = hf_config.get("image_embeddings_dataset", {})
+        embeddings_repo = embeddings_config.get(
+            "repo_id", "jpearce610/image_embeddings_test"
+        )
+        item_id_col = embeddings_config.get("item_id_column", "item_id")
+
+        logger.info(f"Scanning embedding item IDs from {embeddings_repo}...")
+
+        # Stream through to get item IDs without loading embeddings
+        dataset = load_dataset(embeddings_repo, split="train", streaming=True)
+
+        item_ids = set()
+        for sample in dataset:
+            item_ids.add(sample[item_id_col])
+
+        logger.info(f"Found {len(item_ids)} unique item IDs with embeddings")
+        return item_ids
+
+    def create_streaming_dataloader(
+        self,
+        item_prices: dict[int, float],
+        batch_size: int = 64,
+        shuffle_buffer_size: int = 10000,
+    ) -> DataLoader:
+        """
+        Create a streaming DataLoader that loads embeddings in batches from HuggingFace.
+
+        Args:
+            item_prices: Dictionary mapping item_id to price
+            batch_size: Batch size for training
+            shuffle_buffer_size: Size of shuffle buffer for streaming
+
+        Returns:
+            DataLoader that streams embeddings from HuggingFace
+        """
+        hf_config = self.config.get("huggingface", {})
+        embeddings_config = hf_config.get("image_embeddings_dataset", {})
+        embeddings_repo = embeddings_config.get(
+            "repo_id", "jpearce610/image_embeddings_test"
+        )
+        embedding_col = embeddings_config.get("embedding_column", "image_embedding")
+        item_id_col = embeddings_config.get("item_id_column", "item_id")
+
+        dataset = StreamingEmbeddingsDataset(
+            embeddings_repo=embeddings_repo,
+            item_prices=item_prices,
+            embedding_col=embedding_col,
+            item_id_col=item_id_col,
+            transform_fn=self.transform_fn,
+            shuffle_buffer_size=shuffle_buffer_size,
+        )
+
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            num_workers=0,  # Streaming datasets don't support multi-processing
+        )
+
+    def train_streaming(
+        self,
+        train_prices: dict[int, float],
+        val_prices: dict[int, float],
+        steps_per_epoch: int | None = None,
+    ) -> dict[str, list[float]]:
+        """
+        Train the model using streaming data loading.
+
+        This method loads embeddings in batches from HuggingFace instead of
+        loading the entire dataset into memory.
+
+        Args:
+            train_prices: Dictionary mapping item_id to price for training
+            val_prices: Dictionary mapping item_id to price for validation
+            steps_per_epoch: Number of steps per epoch (if None, streams until exhausted)
+
+        Returns:
+            Training history dictionary
+        """
+        model_training_config = self.model_config.get("training", {})
+        batch_size = model_training_config.get(
+            "batch_size", self.training_config.get("batch_size", 64)
+        )
+
+        # Create streaming dataloaders
+        train_loader = self.create_streaming_dataloader(
+            train_prices, batch_size=batch_size
+        )
+        val_loader = self.create_streaming_dataloader(
+            val_prices, batch_size=batch_size, shuffle_buffer_size=1000
+        )
+
+        # Build model if not already built
+        if self.model is None:
+            self.model = self.build_model()
+
+        # Setup optimizer
+        learning_rate = model_training_config.get(
+            "learning_rate", self.training_config.get("learning_rate", 0.001)
+        )
+        weight_decay = model_training_config.get("weight_decay", 0.0001)
+
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=learning_rate,
+            weight_decay=weight_decay,
+        )
+
+        # Setup learning rate scheduler
+        lr_config = self.training_config.get("lr_scheduler", {})
+        if lr_config.get("enabled", True):
+            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer,
+                mode="min",
+                factor=lr_config.get("factor", 0.5),
+                patience=lr_config.get("patience", 5),
+                min_lr=lr_config.get("min_lr", 1e-6),
+            )
+
+        # Loss function
+        criterion = nn.MSELoss()
+
+        # Training loop
+        max_epochs = self.training_config.get("max_epochs", 100)
+        early_stopping_config = self.training_config.get("early_stopping", {})
+        patience = early_stopping_config.get("patience", 10)
+        min_delta = early_stopping_config.get("min_delta", 0.0001)
+
+        # Gradient clipping config
+        grad_clip_config = self.training_config.get("gradient_clip", {})
+        use_grad_clip = grad_clip_config.get("enabled", True)
+        max_grad_norm = grad_clip_config.get("max_norm", 1.0)
+
+        # Steps per epoch (for streaming, we need to limit iterations)
+        if steps_per_epoch is None:
+            steps_per_epoch = len(train_prices) // batch_size
+
+        logger.info(f"Starting streaming training for {max_epochs} epochs...")
+        logger.info(f"  Batch size: {batch_size}")
+        logger.info(f"  Steps per epoch: {steps_per_epoch}")
+        logger.info(f"  Learning rate: {learning_rate}")
+        logger.info(f"  Early stopping patience: {patience}")
+
+        for epoch in range(max_epochs):
+            # Training phase
+            self.model.train()
+            train_loss = 0.0
+            train_steps = 0
+
+            # Create fresh dataloader for each epoch
+            train_loader = self.create_streaming_dataloader(
+                train_prices, batch_size=batch_size
+            )
+
+            for batch_embeddings, batch_prices in train_loader:
+                if train_steps >= steps_per_epoch:
+                    break
+
+                batch_embeddings = batch_embeddings.to(self.device)
+                batch_prices = batch_prices.to(self.device)
+
+                self.optimizer.zero_grad()
+                outputs = self.model(batch_embeddings)
+                loss = criterion(outputs, batch_prices)
+                loss.backward()
+
+                # Gradient clipping
+                if use_grad_clip:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), max_grad_norm
+                    )
+
+                self.optimizer.step()
+                train_loss += loss.item()
+                train_steps += 1
+
+            if train_steps > 0:
+                train_loss /= train_steps
+
+            # Validation phase
+            val_loss, val_metrics = self._evaluate_streaming(val_loader, criterion)
+
+            # Update learning rate scheduler
+            if self.scheduler is not None:
+                self.scheduler.step(val_loss)
+
+            # Record history
+            self.history["train_loss"].append(train_loss)
+            self.history["val_loss"].append(val_loss)
+            self.history["val_mae"].append(
+                val_metrics.get("val_mae_original", val_metrics.get("val_mae", 0))
+            )
+
+            # Log progress
+            if (epoch + 1) % 10 == 0 or epoch == 0:
+                current_lr = self.optimizer.param_groups[0]["lr"]
+                logger.info(
+                    f"Epoch {epoch + 1}/{max_epochs} - "
+                    f"Train Loss: {train_loss:.4f} - "
+                    f"Val Loss: {val_loss:.4f} - "
+                    f"Val MAE (original): ${val_metrics.get('val_mae_original', 0):.2f} - "
+                    f"LR: {current_lr:.6f}"
+                )
+
+            # Early stopping check
+            if val_loss < self.best_val_loss - min_delta:
+                self.best_val_loss = val_loss
+                self.patience_counter = 0
+                # Save best model
+                self.save(self.output_dir / "best_model.pt")
+            else:
+                self.patience_counter += 1
+
+            if self.patience_counter >= patience:
+                logger.info(f"Early stopping triggered at epoch {epoch + 1}")
+                break
+
+        logger.info("Streaming training complete!")
+        return self.history
+
+    def _evaluate_streaming(
+        self,
+        data_loader: DataLoader,
+        criterion: nn.Module,
+        max_batches: int = 100,
+    ) -> tuple[float, dict[str, float]]:
+        """
+        Evaluate the model on streaming data.
+
+        Args:
+            data_loader: Streaming DataLoader for evaluation
+            criterion: Loss function
+            max_batches: Maximum number of batches to evaluate
+
+        Returns:
+            Tuple of (loss, metrics_dict)
+        """
+        self.model.eval()
+        total_loss = 0.0
+        all_predictions = []
+        all_targets = []
+        num_batches = 0
+
+        with torch.no_grad():
+            for batch_embeddings, batch_prices in data_loader:
+                if num_batches >= max_batches:
+                    break
+
+                batch_embeddings = batch_embeddings.to(self.device)
+                batch_prices = batch_prices.to(self.device)
+
+                outputs = self.model(batch_embeddings)
+                loss = criterion(outputs, batch_prices)
+                total_loss += loss.item()
+
+                all_predictions.append(outputs.cpu().numpy())
+                all_targets.append(batch_prices.cpu().numpy())
+                num_batches += 1
+
+        if num_batches == 0:
+            return 0.0, {}
+
+        total_loss /= num_batches
+        predictions_transformed = np.concatenate(all_predictions).flatten()
+        y_true_transformed = np.concatenate(all_targets).flatten()
+
+        # Compute metrics on transformed scale
+        metrics = compute_regression_metrics(
+            y_true_transformed, predictions_transformed, prefix="val_"
+        )
+
+        # Compute metrics on original scale
+        if self.metrics_config.get("compute_original_scale_metrics", True):
+            predictions_original = self.inverse_transform_fn(predictions_transformed)
+            y_original = self.inverse_transform_fn(y_true_transformed)
+            original_metrics = compute_regression_metrics(
+                y_original, predictions_original, prefix="val_"
+            )
+
+            # Add original scale metrics with "_original" suffix
+            for key, value in original_metrics.items():
+                metrics[f"{key}_original"] = value
+
+        return total_loss, metrics
 
     def prepare_data(
         self,
@@ -821,6 +1249,17 @@ def main() -> None:
         action="store_true",
         help="Only evaluate a trained model (no training)",
     )
+    parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help="Use streaming data loading (memory efficient for large datasets)",
+    )
+    parser.add_argument(
+        "--steps-per-epoch",
+        type=int,
+        default=None,
+        help="Number of training steps per epoch (for streaming mode)",
+    )
 
     args = parser.parse_args()
 
@@ -844,8 +1283,67 @@ def main() -> None:
         trainer.load()
         metrics = trainer.evaluate(X_test, y_test)
         print(f"Test metrics: {metrics}")
+    elif args.streaming:
+        # Streaming training pipeline (memory efficient)
+        print("Using streaming data loading (memory efficient mode)...")
+
+        # Step 1: Load items dataset (smaller, contains prices)
+        items_df = trainer.load_items_dataset()
+
+        # Step 2: Get item IDs that have embeddings (streaming scan)
+        embedding_item_ids = trainer.get_embedding_item_ids()
+
+        # Step 3: Create price lookup for items with embeddings
+        all_prices = trainer.create_item_price_lookup(
+            items_df, valid_item_ids=embedding_item_ids
+        )
+
+        # Step 4: Split item IDs into train/val/test
+        from sklearn.model_selection import train_test_split
+
+        item_ids = list(all_prices.keys())
+        train_ratio = config.get("data_split", {}).get("train_ratio", 0.70)
+        val_ratio = config.get("data_split", {}).get("validation_ratio", 0.15)
+        test_ratio = config.get("data_split", {}).get("test_ratio", 0.15)
+        random_state = config.get("data_split", {}).get("random_state", 42)
+
+        # First split: train vs (val + test)
+        train_ids, temp_ids = train_test_split(
+            item_ids, train_size=train_ratio, random_state=random_state
+        )
+
+        # Second split: val vs test
+        relative_test_ratio = test_ratio / (val_ratio + test_ratio)
+        val_ids, test_ids = train_test_split(
+            temp_ids, test_size=relative_test_ratio, random_state=random_state
+        )
+
+        train_prices = {item_id: all_prices[item_id] for item_id in train_ids}
+        val_prices = {item_id: all_prices[item_id] for item_id in val_ids}
+        test_prices = {item_id: all_prices[item_id] for item_id in test_ids}
+
+        logger.info(
+            f"Data split: train={len(train_prices)}, "
+            f"val={len(val_prices)}, test={len(test_prices)}"
+        )
+
+        # Step 5: Train using streaming
+        trainer.train_streaming(
+            train_prices, val_prices, steps_per_epoch=args.steps_per_epoch
+        )
+
+        # Load best model
+        trainer.load()
+
+        print("\n" + "=" * 50)
+        print("STREAMING TRAINING COMPLETE")
+        print("=" * 50)
+        print(f"Best validation loss: {trainer.best_val_loss:.4f}")
+        print(f"Training samples: {len(train_prices)}")
+        print(f"Validation samples: {len(val_prices)}")
+        print(f"Test samples: {len(test_prices)}")
     else:
-        # Full training pipeline
+        # Full training pipeline (loads all data into memory)
         embeddings_df, items_df = trainer.load_data_from_huggingface()
         X_train, X_val, X_test, y_train, y_val, y_test = trainer.prepare_data(
             embeddings_df, items_df

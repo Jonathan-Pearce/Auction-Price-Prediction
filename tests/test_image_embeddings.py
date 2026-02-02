@@ -453,3 +453,106 @@ def test_model_save_and_load(tmp_path, sample_embeddings, sample_prices):
     pred2 = new_trainer.predict(test_input)
 
     np.testing.assert_array_almost_equal(pred1, pred2, decimal=5)
+
+
+# =============================================================================
+# Streaming Dataset Tests
+# =============================================================================
+
+
+def test_streaming_embeddings_dataset_import():
+    """Test that StreamingEmbeddingsDataset can be imported."""
+    from src.modeling.image_embeddings import StreamingEmbeddingsDataset
+
+    assert StreamingEmbeddingsDataset is not None
+
+
+def test_create_item_price_lookup(sample_prices):
+    """Test creating item price lookup dictionary."""
+    import pandas as pd
+
+    config = load_ml_config()
+    trainer = ImageEmbeddingsTrainer(config=config)
+
+    # Create mock items DataFrame
+    items_df = pd.DataFrame(
+        {
+            "item_id": list(range(len(sample_prices))),
+            "item_current_bid": sample_prices,
+        }
+    )
+
+    # Create lookup
+    price_lookup = trainer.create_item_price_lookup(items_df)
+
+    assert len(price_lookup) == len(sample_prices)
+    # Keys and values should be numeric
+    assert all(np.isreal(k) for k in price_lookup.keys())
+    assert all(isinstance(v, float) for v in price_lookup.values())
+
+
+def test_create_item_price_lookup_with_filter(sample_prices):
+    """Test creating item price lookup with item ID filter."""
+    import pandas as pd
+
+    config = load_ml_config()
+    trainer = ImageEmbeddingsTrainer(config=config)
+
+    # Create mock items DataFrame
+    items_df = pd.DataFrame(
+        {
+            "item_id": list(range(len(sample_prices))),
+            "item_current_bid": sample_prices,
+        }
+    )
+
+    # Filter to only include items 0, 1, 2
+    valid_ids = {0, 1, 2}
+    price_lookup = trainer.create_item_price_lookup(items_df, valid_item_ids=valid_ids)
+
+    assert len(price_lookup) == 3
+    assert set(price_lookup.keys()) == valid_ids
+
+
+def test_create_item_price_lookup_exclude_zeros(sample_prices):
+    """Test creating item price lookup excluding zero-bid items."""
+    import pandas as pd
+
+    config = load_ml_config()
+    # Set config to exclude zero bids
+    config["target"]["handle_zero_bids"] = "exclude"
+    trainer = ImageEmbeddingsTrainer(config=config)
+
+    # Create mock items DataFrame with some zeros
+    prices_with_zeros = sample_prices.copy()
+    prices_with_zeros[:5] = 0.0
+
+    items_df = pd.DataFrame(
+        {
+            "item_id": list(range(len(prices_with_zeros))),
+            "item_current_bid": prices_with_zeros,
+        }
+    )
+
+    price_lookup = trainer.create_item_price_lookup(items_df)
+
+    # Should exclude the 5 zero-bid items
+    assert len(price_lookup) == len(sample_prices) - 5
+    assert all(v > 0 for v in price_lookup.values())
+
+
+def test_create_streaming_dataloader():
+    """Test creating a streaming dataloader."""
+    config = load_ml_config()
+    trainer = ImageEmbeddingsTrainer(config=config)
+
+    # Create mock price lookup
+    item_prices = {1: 10.0, 2: 20.0, 3: 30.0}
+
+    # This will create the dataloader (but won't actually stream without HF connection)
+    dataloader = trainer.create_streaming_dataloader(
+        item_prices, batch_size=32, shuffle_buffer_size=100
+    )
+
+    assert dataloader is not None
+    assert dataloader.batch_size == 32

@@ -230,7 +230,7 @@ fusion_model:
 huggingface:
   # Image embeddings dataset
   image_embeddings_dataset:
-    repo_id: "jpearce610/image_embeddings_test"
+    repo_id: "jpearce610/image_embeddings"
     embedding_column: "image_embedding"
     item_id_column: "item_id"
   

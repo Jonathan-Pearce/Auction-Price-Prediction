@@ -386,7 +386,7 @@ class ImageEmbeddingsTrainer:
         # Load image embeddings dataset
         embeddings_config = hf_config.get("image_embeddings_dataset", {})
         embeddings_repo = embeddings_config.get(
-            "repo_id", "jpearce610/image_embeddings_test"
+            "repo_id", "jpearce610/image_embeddings"
         )
 
         logger.info(f"Loading embeddings from {embeddings_repo}...")
@@ -484,7 +484,7 @@ class ImageEmbeddingsTrainer:
         hf_config = self.config.get("huggingface", {})
         embeddings_config = hf_config.get("image_embeddings_dataset", {})
         embeddings_repo = embeddings_config.get(
-            "repo_id", "jpearce610/image_embeddings_test"
+            "repo_id", "jpearce610/image_embeddings"
         )
         item_id_col = embeddings_config.get("item_id_column", "item_id")
 
@@ -520,7 +520,7 @@ class ImageEmbeddingsTrainer:
         hf_config = self.config.get("huggingface", {})
         embeddings_config = hf_config.get("image_embeddings_dataset", {})
         embeddings_repo = embeddings_config.get(
-            "repo_id", "jpearce610/image_embeddings_test"
+            "repo_id", "jpearce610/image_embeddings"
         )
         embedding_col = embeddings_config.get("embedding_column", "image_embedding")
         item_id_col = embeddings_config.get("item_id_column", "item_id")

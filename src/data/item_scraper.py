@@ -251,11 +251,11 @@ class ItemDataFetcher:
                 result = await self.fetch_and_process_auction(auction_id)
                 if progress_callback:
                     progress_callback(auction_id, result is not None)
-                
+
                 if result is not None:
                     logger.info(f"Fetched {len(result)} items for auction {auction_id}")
                     yield auction_id, result
-                    
+
             except Exception as e:
                 logger.error(f"Exception for auction {auction_id}: {e}")
                 if progress_callback:
@@ -361,27 +361,27 @@ def append_to_parquet_efficient(df_new: pd.DataFrame, output_file: Path) -> int:
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
-    
+
     if output_file.exists():
         # Read existing parquet file metadata to get row count
         existing_table = pq.read_table(output_file)
         existing_count = len(existing_table)
-        
+
         # Convert new df to arrow table
         new_table = pa.Table.from_pandas(df_new, preserve_index=False)
-        
+
         # Write both tables to parquet
         combined_table = pa.concat_tables([existing_table, new_table])
         pq.write_table(combined_table, output_file)
-        
+
         total_count = len(combined_table)
         logger.info(f"Appended {len(df_new)} rows (total: {total_count})")
-        
+
         # Clean up
         del existing_table
         del new_table
         del combined_table
-        
+
         return total_count
     else:
         # First write
@@ -606,17 +606,17 @@ async def scrape_items(
         f"Starting to scrape items from {len(auction_ids)} auctions "
         f"(max {max_workers} concurrent, write every {batch_size} auctions)..."
     )
-    
+
     total_items_scraped = 0
     auctions_processed = 0
     accumulated_items = []
-    
+
     # Process in chunks
     for chunk_start in range(0, len(auction_ids), batch_size):
         chunk_ids = auction_ids[chunk_start : chunk_start + batch_size]
         chunk_num = chunk_start // batch_size + 1
         total_chunks = (len(auction_ids) + batch_size - 1) // batch_size
-        
+
         logger.info(
             f"Processing chunk {chunk_num}/{total_chunks} with {len(chunk_ids)} auctions "
             f"(progress: {auctions_processed}/{len(auction_ids)})"
@@ -631,32 +631,32 @@ async def scrape_items(
                 chunk_ids,
                 progress_callback=progress_callback if use_progress_tracking else None,
             )
-        
+
         # Add to accumulated items
         accumulated_items.extend(chunk_items)
         auctions_processed += len(chunk_ids)
-        
+
         logger.info(
             f"Chunk {chunk_num} fetched {len(chunk_items)} items. "
             f"Accumulated: {len(accumulated_items)} items"
         )
-        
+
         # Write accumulated items to disk and clear memory
         if accumulated_items:
             df_batch = transform_item_data(accumulated_items)
-            
+
             if not df_batch.empty:
                 total_items_scraped = append_to_parquet_efficient(df_batch, output_file)
                 logger.info(
                     f"Saved chunk {chunk_num}. Total in file: {total_items_scraped:,} items"
                 )
-            
+
             # Clear memory
             del df_batch
             del accumulated_items
             del chunk_items
             accumulated_items = []  # Reset for next chunk
-        
+
         logger.info(
             f"Progress: {auctions_processed}/{len(auction_ids)} auctions complete"
         )

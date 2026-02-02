@@ -281,6 +281,106 @@ def get_enriched_auction_output_directory(processed: bool = True) -> Path:
     return PROJECT_ROOT / directory
 
 
+def get_image_output_directory(processed: bool = True) -> Path:
+    """
+    Get image output directory path.
+
+    Args:
+        processed: If True, returns image processed directory;
+                   otherwise image raw directory
+
+    Returns:
+        Path to image output directory
+    """
+    key = "image_processed_directory" if processed else "image_raw_directory"
+    directory = get_config_value("storage", "output", key)
+    return PROJECT_ROOT / directory
+
+
+def get_image_progress_file() -> Path:
+    """Get path to image scraper progress tracking file."""
+    image_raw_dir = get_image_output_directory(processed=False)
+    filename = get_config_value(
+        "storage",
+        "progress",
+        "image_progress_filename",
+        default="image_scraper_progress.json",
+    )
+    return image_raw_dir / filename
+
+
+def get_image_model_config() -> dict:
+    """
+    Get image model configuration.
+
+    Returns:
+        Dictionary with model configuration
+    """
+    return {
+        "onnx_file": get_config_value(
+            "image_processing",
+            "model",
+            "onnx_file",
+            default="models/mobilenet_v3_small_Opset17.onnx",
+        ),
+        "embedding_dim": get_config_value(
+            "image_processing", "model", "embedding_dim", default=576
+        ),
+        "input_size": get_config_value(
+            "image_processing", "model", "input_size", default=224
+        ),
+    }
+
+
+def get_image_preprocessing_config() -> dict:
+    """
+    Get image preprocessing configuration.
+
+    Returns:
+        Dictionary with preprocessing parameters
+    """
+    return {
+        "max_dimension": get_config_value(
+            "image_processing", "preprocessing", "max_dimension", default=224
+        ),
+        "target_size": get_config_value(
+            "image_processing", "preprocessing", "target_size", default=[224, 224]
+        ),
+        "mean": get_config_value(
+            "image_processing",
+            "preprocessing",
+            "mean",
+            default=[0.485, 0.456, 0.406],
+        ),
+        "std": get_config_value(
+            "image_processing",
+            "preprocessing",
+            "std",
+            default=[0.229, 0.224, 0.225],
+        ),
+    }
+
+
+def get_image_http_config() -> dict:
+    """
+    Get HTTP configuration for image download.
+
+    Returns:
+        Dictionary with HTTP parameters
+    """
+    return {
+        "timeout": get_config_value(
+            "image_processing", "http", "timeout", default=30
+        ),
+        "max_retries": get_config_value(
+            "image_processing", "http", "max_retries", default=3
+        ),
+        "retry_delay": get_config_value(
+            "image_processing", "http", "retry_delay", default=1.0
+        ),
+    }
+
+
 def get_hf_dataset_repo() -> str:
     """Get Hugging Face dataset repository for loading auction IDs."""
     return get_config_value(
@@ -762,6 +862,34 @@ HF_ENRICHED_AUCTION_DATASET_TAGS = get_config_value(
 )
 HF_ENRICHED_AUCTION_UPLOAD_FILES = get_config_value(
     "huggingface", "enriched_auction_upload_files", default=[]
+)
+
+# Image Dataset Configuration
+IMAGE_RAW_OUTPUT_DIR = get_image_output_directory(processed=False)
+IMAGE_PROCESSED_OUTPUT_DIR = get_image_output_directory(processed=True)
+IMAGE_DATA_FILENAME = get_config_value(
+    "storage", "output", "image_data_filename", default="image_embeddings.parquet"
+)
+IMAGE_PROGRESS_FILE = get_image_progress_file()
+IMAGE_MODEL_CONFIG = get_image_model_config()
+IMAGE_PREPROCESSING_CONFIG = get_image_preprocessing_config()
+IMAGE_HTTP_CONFIG = get_image_http_config()
+
+# Image HF Dataset Configuration
+HF_IMAGE_DATASET_NAME = get_config_value(
+    "huggingface", "image_dataset", "name", default="maxsold-image-embeddings"
+)
+HF_IMAGE_DATASET_DESCRIPTION = get_config_value(
+    "huggingface", "image_dataset", "description", default=""
+)
+HF_IMAGE_DATASET_LICENSE = get_config_value(
+    "huggingface", "image_dataset", "license", default="cc-by-4.0"
+)
+HF_IMAGE_DATASET_TAGS = get_config_value(
+    "huggingface", "image_dataset", "tags", default=[]
+)
+HF_IMAGE_UPLOAD_FILES = get_config_value(
+    "huggingface", "image_upload_files", default=[]
 )
 
 # Validation Configuration

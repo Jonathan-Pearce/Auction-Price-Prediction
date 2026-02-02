@@ -28,10 +28,9 @@ from typing import Any
 
 from loguru import logger
 
-from src.config import settings, RAW_DATA_DIR, PROCESSED_DATA_DIR
+from src.config import PROCESSED_DATA_DIR, RAW_DATA_DIR, settings
 from src.data.maxsold_client import MaxSoldClient
-from src.data.schemas import Auction, AuctionRecord, ItemRecord, BidRecord
-
+from src.data.schemas import Auction, AuctionRecord, BidRecord, ItemRecord
 
 # =============================================================================
 # Scraper Configuration
@@ -195,7 +194,6 @@ class DataStorage:
 
     def save_to_duckdb(self, auctions: list[Auction]) -> None:
         """Insert auction data into DuckDB database."""
-        import duckdb
 
         # TODO: Implement DuckDB insertion
         # Use the schema from references/schema.sql
@@ -375,8 +373,6 @@ async def upload_to_huggingface(
         data_dir: Directory with Parquet files
         repo_id: Hugging Face dataset repository ID
     """
-    from datasets import Dataset, DatasetDict
-    import pandas as pd
 
     data_dir = data_dir or PROCESSED_DATA_DIR
     repo_id = repo_id or settings.huggingface.dataset_id

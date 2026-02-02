@@ -470,36 +470,6 @@ class ImageEmbeddingsTrainer:
         logger.info(f"Created price lookup with {len(price_lookup)} items")
         return price_lookup
 
-    def get_embedding_item_ids(self) -> set[int]:
-        """
-        Get the set of item IDs that have embeddings by streaming through the dataset.
-
-        This avoids loading the full embeddings dataset into memory.
-
-        Returns:
-            Set of item IDs that have embeddings
-        """
-        from datasets import load_dataset
-
-        hf_config = self.config.get("huggingface", {})
-        embeddings_config = hf_config.get("image_embeddings_dataset", {})
-        embeddings_repo = embeddings_config.get(
-            "repo_id", "jpearce610/image_embeddings"
-        )
-        item_id_col = embeddings_config.get("item_id_column", "item_id")
-
-        logger.info(f"Scanning embedding item IDs from {embeddings_repo}...")
-
-        # Stream through to get item IDs without loading embeddings
-        dataset = load_dataset(embeddings_repo, split="train", streaming=True)
-
-        item_ids = set()
-        for sample in dataset:
-            item_ids.add(sample[item_id_col])
-
-        logger.info(f"Found {len(item_ids)} unique item IDs with embeddings")
-        return item_ids
-
     def create_streaming_dataloader(
         self,
         item_prices: dict[int, float],
@@ -1287,18 +1257,15 @@ def main() -> None:
         # Streaming training pipeline (memory efficient)
         print("Using streaming data loading (memory efficient mode)...")
 
-        # Step 1: Load items dataset (smaller, contains prices)
+        # Step 1: Load items dataset (contains item_id, auction_id, and prices)
+        # These item_ids will match values in the image embedding dataset
         items_df = trainer.load_items_dataset()
 
-        # Step 2: Get item IDs that have embeddings (streaming scan)
-        embedding_item_ids = trainer.get_embedding_item_ids()
+        # Step 2: Create price lookup directly from items dataset
+        # No need to scan embeddings - item_ids in items dataset match embeddings
+        all_prices = trainer.create_item_price_lookup(items_df)
 
-        # Step 3: Create price lookup for items with embeddings
-        all_prices = trainer.create_item_price_lookup(
-            items_df, valid_item_ids=embedding_item_ids
-        )
-
-        # Step 4: Split item IDs into train/val/test
+        # Step 3: Split item IDs into train/val/test
         from sklearn.model_selection import train_test_split
 
         item_ids = list(all_prices.keys())
@@ -1327,7 +1294,7 @@ def main() -> None:
             f"val={len(val_prices)}, test={len(test_prices)}"
         )
 
-        # Step 5: Train using streaming
+        # Step 4: Train using streaming (batches of embeddings loaded on-demand)
         trainer.train_streaming(
             train_prices, val_prices, steps_per_epoch=args.steps_per_epoch
         )

@@ -593,17 +593,32 @@ class ImageEmbeddingsTrainer:
         logger.info(f"  Steps per epoch: {steps_per_epoch}")
         logger.info(f"  Learning rate: {learning_rate}")
         logger.info(f"  Early stopping patience: {patience}")
+        logger.info(f"  Training samples: {len(train_prices)}")
+        logger.info(f"  Validation samples: {len(val_prices)}")
+        logger.info(f"  Device: {self.device}")
+        logger.info(f"  Model parameters: {self.model.count_parameters():,}")
+        logger.info("")
+
+        # Progress reporting frequency
+        log_interval = max(1, steps_per_epoch // 10)  # Log ~10 times per epoch
 
         for epoch in range(max_epochs):
             # Training phase
             self.model.train()
             train_loss = 0.0
             train_steps = 0
+            epoch_start_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
+            epoch_end_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
+            
+            if epoch_start_time:
+                epoch_start_time.record()
 
             # Create fresh dataloader for each epoch
             train_loader = self.create_streaming_dataloader(
                 train_prices, batch_size=batch_size
             )
+
+            logger.info(f"Epoch {epoch + 1}/{max_epochs} - Training...")
 
             for batch_embeddings, batch_prices in train_loader:
                 if train_steps >= steps_per_epoch:
@@ -627,15 +642,35 @@ class ImageEmbeddingsTrainer:
                 train_loss += loss.item()
                 train_steps += 1
 
+                # Log batch progress
+                if train_steps % log_interval == 0 or train_steps == 1:
+                    avg_loss = train_loss / train_steps
+                    progress_pct = (train_steps / steps_per_epoch) * 100
+                    logger.info(
+                        f"  Step {train_steps}/{steps_per_epoch} ({progress_pct:.1f}%) - "
+                        f"Batch Loss: {loss.item():.4f} - "
+                        f"Avg Loss: {avg_loss:.4f}"
+                    )
+
             if train_steps > 0:
                 train_loss /= train_steps
 
+            if epoch_end_time:
+                epoch_end_time.record()
+                torch.cuda.synchronize()
+                epoch_time = epoch_start_time.elapsed_time(epoch_end_time) / 1000  # Convert to seconds
+            else:
+                epoch_time = None
+
             # Validation phase
+            logger.info(f"Epoch {epoch + 1}/{max_epochs} - Validating...")
             val_loss, val_metrics = self._evaluate_streaming(val_loader, criterion)
 
             # Update learning rate scheduler
+            old_lr = self.optimizer.param_groups[0]["lr"]
             if self.scheduler is not None:
                 self.scheduler.step(val_loss)
+            new_lr = self.optimizer.param_groups[0]["lr"]
 
             # Record history
             self.history["train_loss"].append(train_loss)
@@ -644,31 +679,50 @@ class ImageEmbeddingsTrainer:
                 val_metrics.get("val_mae_original", val_metrics.get("val_mae", 0))
             )
 
-            # Log progress
-            if (epoch + 1) % 10 == 0 or epoch == 0:
-                current_lr = self.optimizer.param_groups[0]["lr"]
-                logger.info(
-                    f"Epoch {epoch + 1}/{max_epochs} - "
-                    f"Train Loss: {train_loss:.4f} - "
-                    f"Val Loss: {val_loss:.4f} - "
-                    f"Val MAE (original): ${val_metrics.get('val_mae_original', 0):.2f} - "
-                    f"LR: {current_lr:.6f}"
-                )
+            # Log comprehensive epoch summary
+            logger.info("")
+            logger.info(f"{'='*70}")
+            logger.info(f"Epoch {epoch + 1}/{max_epochs} Summary:")
+            logger.info(f"  Train Loss: {train_loss:.4f}")
+            logger.info(f"  Val Loss: {val_loss:.4f}")
+            logger.info(f"  Val MAE (transformed): {val_metrics.get('val_mae', 0):.4f}")
+            logger.info(f"  Val MAE (original): ${val_metrics.get('val_mae_original', 0):.2f}")
+            logger.info(f"  Val RMSE (original): ${val_metrics.get('val_rmse_original', 0):.2f}")
+            logger.info(f"  Val R² (original): {val_metrics.get('val_r2_original', 0):.4f}")
+            logger.info(f"  Learning Rate: {new_lr:.6f}{' (reduced)' if new_lr < old_lr else ''}")
+            if epoch_time:
+                logger.info(f"  Epoch Time: {epoch_time:.2f}s")
+            logger.info(f"{'='*70}")
+            logger.info("")
 
             # Early stopping check
             if val_loss < self.best_val_loss - min_delta:
+                improvement = self.best_val_loss - val_loss
                 self.best_val_loss = val_loss
                 self.patience_counter = 0
                 # Save best model
                 self.save(self.output_dir / "best_model.pt")
+                logger.info(f"✓ New best model! Val loss improved by {improvement:.4f}")
+                logger.info(f"  Model saved to {self.output_dir / 'best_model.pt'}")
             else:
                 self.patience_counter += 1
+                logger.info(
+                    f"⚠ No improvement for {self.patience_counter} epoch(s). "
+                    f"Patience: {self.patience_counter}/{patience}"
+                )
 
             if self.patience_counter >= patience:
+                logger.info("")
+                logger.info(f"{'='*70}")
                 logger.info(f"Early stopping triggered at epoch {epoch + 1}")
+                logger.info(f"Best validation loss: {self.best_val_loss:.4f}")
+                logger.info(f"{'='*70}")
                 break
 
+        logger.info("")
         logger.info("Streaming training complete!")
+        logger.info(f"Final best validation loss: {self.best_val_loss:.4f}")
+        logger.info(f"Total epochs trained: {len(self.history['train_loss'])}")
         return self.history
 
     def _evaluate_streaming(
@@ -744,6 +798,9 @@ class ImageEmbeddingsTrainer:
         """
         Prepare and split data for training.
 
+        Splits are stratified by auction_id to prevent data leakage - all items
+        from the same auction stay in the same split.
+
         Args:
             embeddings_df: DataFrame with embeddings
             items_df: DataFrame with prices
@@ -751,7 +808,7 @@ class ImageEmbeddingsTrainer:
         Returns:
             Tuple of (X_train, X_val, X_test, y_train, y_val, y_test)
         """
-        from sklearn.model_selection import train_test_split
+        from sklearn.model_selection import GroupShuffleSplit
 
         hf_config = self.config.get("huggingface", {})
         embeddings_config = hf_config.get("image_embeddings_dataset", {})
@@ -762,31 +819,33 @@ class ImageEmbeddingsTrainer:
         item_id_col = embeddings_config.get("item_id_column", "item_id")
         price_col = items_config.get("price_column", "item_current_bid")
         items_id_col = items_config.get("item_id_column", "item_id")
+        auction_id_col = items_config.get("auction_id_column", "auction_id")
 
         # Merge on item_id
-        logger.info("Merging embeddings with prices...")
+        logger.info("Merging embeddings with prices and auction IDs...")
 
         # Ensure item_id columns match
         embeddings_df = embeddings_df.rename(columns={item_id_col: "item_id"})
         items_df = items_df.rename(columns={items_id_col: "item_id"})
 
+        # Merge including auction_id for stratification
         merged_df = embeddings_df.merge(
-            items_df[["item_id", price_col]], on="item_id", how="inner"
+            items_df[["item_id", price_col, auction_id_col]], on="item_id", how="inner"
         )
 
-        logger.info(f"Merged data has {len(merged_df)} samples")
-
-        # Extract embeddings and prices
-        embeddings = np.stack(merged_df[embedding_col].values)
-        prices = merged_df[price_col].values.astype(np.float32)
+        logger.info(f"Merged data has {len(merged_df)} samples from {merged_df[auction_id_col].nunique()} auctions")
 
         # Handle zero-bid items
         handle_zeros = self.target_config.get("handle_zero_bids", "include")
         if handle_zeros == "exclude":
-            mask = prices > 0
-            embeddings = embeddings[mask]
-            prices = prices[mask]
-            logger.info(f"Excluded zero-bid items, remaining: {len(prices)}")
+            mask = merged_df[price_col] > 0
+            merged_df = merged_df[mask].reset_index(drop=True)
+            logger.info(f"Excluded zero-bid items, remaining: {len(merged_df)}")
+
+        # Extract embeddings, prices, and auction_ids
+        embeddings = np.stack(merged_df[embedding_col].values)
+        prices = merged_df[price_col].values.astype(np.float32)
+        auction_ids = merged_df[auction_id_col].values
 
         # Get split ratios
         train_ratio = self.split_config.get("train_ratio", 0.70)
@@ -794,26 +853,48 @@ class ImageEmbeddingsTrainer:
         test_ratio = self.split_config.get("test_ratio", 0.15)
         random_state = self.split_config.get("random_state", 42)
 
+        # Use GroupShuffleSplit to stratify by auction_id
         # First split: train vs (val + test)
-        X_train, X_temp, y_train, y_temp = train_test_split(
-            embeddings,
-            prices,
+        gss_train = GroupShuffleSplit(
+            n_splits=1,
             train_size=train_ratio,
             random_state=random_state,
         )
+        train_idx, temp_idx = next(gss_train.split(embeddings, prices, groups=auction_ids))
 
-        # Second split: val vs test
+        X_train, y_train = embeddings[train_idx], prices[train_idx]
+        X_temp, y_temp = embeddings[temp_idx], prices[temp_idx]
+        auction_ids_temp = auction_ids[temp_idx]
+
+        # Second split: val vs test (from temp)
         relative_test_ratio = test_ratio / (val_ratio + test_ratio)
-        X_val, X_test, y_val, y_test = train_test_split(
-            X_temp,
-            y_temp,
+        gss_test = GroupShuffleSplit(
+            n_splits=1,
             test_size=relative_test_ratio,
             random_state=random_state,
         )
+        val_idx, test_idx = next(gss_test.split(X_temp, y_temp, groups=auction_ids_temp))
+
+        X_val, y_val = X_temp[val_idx], y_temp[val_idx]
+        X_test, y_test = X_temp[test_idx], y_temp[test_idx]
+
+        # Get auction IDs for each split for verification
+        train_auction_ids = set(auction_ids[train_idx])
+        val_auction_ids = set(auction_ids[temp_idx][val_idx])
+        test_auction_ids = set(auction_ids[temp_idx][test_idx])
 
         logger.info(
-            f"Data split: train={len(X_train)}, val={len(X_val)}, test={len(X_test)}"
+            f"Data split (stratified by auction_id): "
+            f"train={len(X_train)} ({len(train_auction_ids)} auctions), "
+            f"val={len(X_val)} ({len(val_auction_ids)} auctions), "
+            f"test={len(X_test)} ({len(test_auction_ids)} auctions)"
         )
+
+        # Verify no auction leakage
+        assert len(train_auction_ids & val_auction_ids) == 0, "Train/val auction leakage detected!"
+        assert len(train_auction_ids & test_auction_ids) == 0, "Train/test auction leakage detected!"
+        assert len(val_auction_ids & test_auction_ids) == 0, "Val/test auction leakage detected!"
+        logger.info("✓ No auction leakage detected between splits")
 
         return X_train, X_val, X_test, y_train, y_val, y_test
 

@@ -131,13 +131,14 @@ image_embeddings_model:
   
   # Hidden layer configuration
   # Recommended: 2-3 layers with decreasing size
-  hidden_layers: [256, 128]
+  # Smaller = faster training, less memory
+  hidden_layers: [128, 64]  # Reduced from [256, 128] for speed
   
   # Output dimension (1 for regression)
   output_dim: 1
   
   # Dropout rate for regularization
-  dropout_rate: 0.3
+  dropout_rate: 0.2  # Reduced from 0.3 for faster training
   
   # Whether to use batch normalization
   use_batch_norm: true
@@ -147,9 +148,14 @@ image_embeddings_model:
   
   # Model-specific training parameters
   training:
-    batch_size: 64
-    learning_rate: 0.001
+    batch_size: 256  # Increased from 64 for faster training
+    learning_rate: 0.002  # Increased proportionally with batch size
     weight_decay: 0.0001  # L2 regularization
+    
+    # Streaming-specific settings
+    steps_per_epoch: 1000  # Limit steps to avoid extremely long epochs
+    shuffle_buffer_size: 2000  # Reduced from 10000 for lower memory
+    val_batches: 50  # Reduced from 100 for faster validation
 
 # =============================================================================
 # Tabular Model Configuration

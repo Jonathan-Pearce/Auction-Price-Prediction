@@ -508,6 +508,7 @@ class ImageEmbeddingsTrainer:
             dataset,
             batch_size=batch_size,
             num_workers=0,  # Streaming datasets don't support multi-processing
+            pin_memory=False,  # Disable pin_memory to save memory
         )
 
     def train_streaming(
@@ -534,13 +535,17 @@ class ImageEmbeddingsTrainer:
         batch_size = model_training_config.get(
             "batch_size", self.training_config.get("batch_size", 64)
         )
+        
+        # Get streaming-specific config values
+        shuffle_buffer_size = model_training_config.get("shuffle_buffer_size", 2000)
+        val_shuffle_buffer = min(1000, shuffle_buffer_size // 2)  # Smaller for validation
 
         # Create streaming dataloaders
         train_loader = self.create_streaming_dataloader(
-            train_prices, batch_size=batch_size
+            train_prices, batch_size=batch_size, shuffle_buffer_size=shuffle_buffer_size
         )
         val_loader = self.create_streaming_dataloader(
-            val_prices, batch_size=batch_size, shuffle_buffer_size=1000
+            val_prices, batch_size=batch_size, shuffle_buffer_size=val_shuffle_buffer
         )
 
         # Build model if not already built
@@ -586,17 +591,23 @@ class ImageEmbeddingsTrainer:
 
         # Steps per epoch (for streaming, we need to limit iterations)
         if steps_per_epoch is None:
-            steps_per_epoch = len(train_prices) // batch_size
-
+            # Use config value or calculate based on data size and batch size
+            steps_per_epoch = model_training_config.get(
+                "steps_per_epoch",
+                min(len(train_prices) // batch_size, 1000)  # Default max 1000 steps
+            )
+        
         logger.info(f"Starting streaming training for {max_epochs} epochs...")
         logger.info(f"  Batch size: {batch_size}")
         logger.info(f"  Steps per epoch: {steps_per_epoch}")
+        logger.info(f"  Samples per epoch: ~{steps_per_epoch * batch_size:,}")
         logger.info(f"  Learning rate: {learning_rate}")
         logger.info(f"  Early stopping patience: {patience}")
         logger.info(f"  Training samples: {len(train_prices)}")
         logger.info(f"  Validation samples: {len(val_prices)}")
         logger.info(f"  Device: {self.device}")
         logger.info(f"  Model parameters: {self.model.count_parameters():,}")
+        logger.info(f"  Shuffle buffer: {shuffle_buffer_size:,}")
         logger.info("")
 
         # Progress reporting frequency
@@ -742,6 +753,10 @@ class ImageEmbeddingsTrainer:
         Returns:
             Tuple of (loss, metrics_dict)
         """
+        # Use config value for max_batches if available
+        if max_batches == 100:  # Default value
+            max_batches = self.model_config.get("training", {}).get("val_batches", 50)
+        
         self.model.eval()
         total_loss = 0.0
         all_predictions = []

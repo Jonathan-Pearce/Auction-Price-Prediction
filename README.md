@@ -155,11 +155,16 @@ Visit `http://localhost:8000` for the API docs or `http://localhost:7860` for th
 │   │   └── predict.py
 │   ├── config.py          # Configuration
 │   ├── dataset.py         # Data loading
-│   └── features.py        # Feature engineering
+│   ├── features.py        # Feature engineering
+│   └── datetime_features.py  # Datetime transformations
 ├── data/                   # Local data (gitignored)
 ├── models/                 # Model checkpoints (gitignored)
 ├── notebooks/              # Jupyter notebooks
 ├── docs/                   # Documentation
+│   ├── DATETIME_FEATURES.md  # Datetime feature engineering guide
+│   └── ...
+├── examples/              # Example scripts
+│   └── datetime_features_demo.py  # Datetime features demo
 ├── references/             # Data schemas, API docs
 └── tests/                  # Test files
 ```

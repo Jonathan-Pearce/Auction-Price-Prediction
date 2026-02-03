@@ -9,13 +9,13 @@ import pandas as pd
 import pytest
 
 from src.enriched import (
-    extract_fsa,
     add_fsa_column,
+    compute_enriched_features,
+    enrich_with_demographics,
+    extract_fsa,
+    load_all_enriched_data,
     load_population_data,
     load_tax_statistics,
-    load_all_enriched_data,
-    enrich_with_demographics,
-    compute_enriched_features,
 )
 
 
@@ -50,7 +50,9 @@ class TestFSAExtraction:
         df_with_fsa = add_fsa_column(df)
 
         assert "fsa" in df_with_fsa.columns
-        assert df_with_fsa["fsa"].tolist() == ["M5V", "K1A", None]
+        assert df_with_fsa["fsa"].iloc[0] == "M5V"
+        assert df_with_fsa["fsa"].iloc[1] == "K1A"
+        assert pd.isna(df_with_fsa["fsa"].iloc[2])
 
 
 class TestDataLoading:

@@ -106,6 +106,22 @@ def extract_pickup_windows(auction_removal_info: str) -> dict[str, Any]:
             end_min = int(match.group(5)) if match.group(5) else 0
             end_period = match.group(6).upper()
             
+            # Validate hours are in valid 12-hour format (1-12)
+            if not (1 <= start_hour <= 12) or not (1 <= end_hour <= 12):
+                logger.debug(
+                    f"Invalid hour values: start={start_hour}, end={end_hour}. "
+                    f"Match: '{match.group(0)}'. Skipping."
+                )
+                continue
+            
+            # Validate minutes (0-59)
+            if start_min >= 60 or end_min >= 60:
+                logger.debug(
+                    f"Invalid minute values: start_min={start_min}, end_min={end_min}. "
+                    f"Match: '{match.group(0)}'. Skipping."
+                )
+                continue
+            
             # Convert to 24-hour format
             if "NOON" in start_period:
                 start_hour_24 = 12
@@ -129,12 +145,50 @@ def extract_pickup_windows(auction_removal_info: str) -> dict[str, Any]:
             start_decimal = start_hour_24 + start_min / 60.0
             end_decimal = end_hour_24 + end_min / 60.0
             
-            # Skip invalid time ranges where end is before start
+            # Handle cross-midnight time ranges (e.g., 11PM - 2AM next day)
+            # If end time is before or equal to start time, check if it spans to next day
             if end_decimal <= start_decimal:
-                logger.warning(
-                    f"Invalid time range detected: {start_decimal:.2f} to {end_decimal:.2f}. Skipping."
-                )
-                continue
+                # Skip if same time (zero duration)
+                if end_decimal == start_decimal:
+                    logger.debug(
+                        f"Zero-duration time range: {start_decimal:.2f} to {end_decimal:.2f}. "
+                        f"Match: '{match.group(0)}'. Skipping."
+                    )
+                    continue
+                
+                # For pickup windows, it's common to span midnight
+                # Valid cross-midnight patterns:
+                # 1. Late evening to next day: start ≥ 8PM AND (end is AM OR end ≤ 6PM)
+                #    Examples: "11PM - 2AM", "11PM - 2PM", "9PM - 3PM"
+                # 2. Morning/midday to early next morning: start < 8PM AND end ≤ 6AM
+                #    Examples: "9AM - 1AM", "10AM - 2AM", "12PM - 3AM"
+                # Invalid: Late evening to late evening (e.g., "9:30PM - 8PM")
+                
+                is_valid_cross_midnight = False
+                
+                if start_hour_24 >= 20:  # Late evening start
+                    # End must be early (≤ 6PM) to be valid next-day
+                    if end_hour_24 <= 18:
+                        is_valid_cross_midnight = True
+                elif end_hour_24 <= 6:  # Very early end (1-6 AM)
+                    # Any start before 8PM going to early morning is valid
+                    is_valid_cross_midnight = True
+                
+                if is_valid_cross_midnight:
+                    # Add 24 hours to end time to represent next day
+                    end_decimal += 24.0
+                    logger.debug(
+                        f"Cross-midnight range detected: {start_decimal:.2f} to {end_decimal:.2f}. "
+                        f"Match: '{match.group(0)}'"
+                    )
+                else:
+                    # Likely invalid - backwards time without crossing midnight
+                    logger.debug(
+                        f"Invalid time range (backwards, not cross-midnight): "
+                        f"{start_decimal:.2f} to {end_decimal:.2f}. "
+                        f"Match: '{match.group(0)}'. Skipping."
+                    )
+                    continue
             
             time_ranges.append((start_decimal, end_decimal))
         
@@ -142,12 +196,14 @@ def extract_pickup_windows(auction_removal_info: str) -> dict[str, Any]:
             result["num_pickup_windows"] = len(time_ranges)
             
             # Calculate total hours (sum of all windows)
+            # Note: For cross-midnight ranges, end_time will be > 24
             total_hours = sum(end - start for start, end in time_ranges)
             result["total_pickup_hours"] = round(total_hours, 2)
             
             # First pickup start and last pickup end
+            # Normalize times back to 0-24 range for these features
             all_starts = [start for start, _ in time_ranges]
-            all_ends = [end for _, end in time_ranges]
+            all_ends = [end % 24 for _, end in time_ranges]  # Modulo to get time of day
             result["first_pickup_start_hour"] = round(min(all_starts), 2)
             result["last_pickup_end_hour"] = round(max(all_ends), 2)
         

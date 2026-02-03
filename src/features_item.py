@@ -207,18 +207,23 @@ def encode_categorical_features(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def _safe_parse_json_or_list(value: str | list | None) -> list:
+def _safe_parse_json_or_list(value: str | list | dict | None, count_dict_keys: bool = False) -> list:
     """
     Safely parse a JSON string or return a list.
 
     Args:
-        value: JSON string, list, or None
+        value: JSON string, list, dict, or None
+        count_dict_keys: If True and value is a dict, return list of keys
+                         (useful for counting attributes). If False, wrap
+                         dict in a list.
 
     Returns:
         List of items, or empty list if parsing fails
     """
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return []
+    if isinstance(value, dict):
+        return list(value.keys()) if count_dict_keys else [value]
     if isinstance(value, list):
         return value
     if isinstance(value, str):
@@ -228,6 +233,8 @@ def _safe_parse_json_or_list(value: str | list | None) -> list:
             parsed = json.loads(value)
             if isinstance(parsed, list):
                 return parsed
+            if isinstance(parsed, dict):
+                return list(parsed.keys()) if count_dict_keys else [parsed]
             return [parsed] if parsed else []
         except (json.JSONDecodeError, TypeError):
             # If not valid JSON, treat as single item if non-empty
@@ -240,10 +247,10 @@ def add_list_count_features(df: pd.DataFrame) -> pd.DataFrame:
     Add count features for list/JSON variables.
 
     Counts the number of items in:
-    - enriched_item_brands
-    - enriched_item_categories
-    - enriched_item_items
-    - enriched_item_attributes
+    - enriched_item_brands (list of brands)
+    - enriched_item_categories (list of categories)
+    - enriched_item_items (list of items)
+    - enriched_item_attributes (dict of attributes - counts keys)
 
     Args:
         df: DataFrame with list/JSON columns
@@ -254,11 +261,11 @@ def add_list_count_features(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Adding list count features...")
     result = df.copy()
 
+    # List columns (parsed as lists)
     list_columns = {
         "enriched_item_brands": "item_brands_count",
         "enriched_item_categories": "item_categories_count",
         "enriched_item_items": "item_items_count",
-        "enriched_item_attributes": "item_attributes_count",
     }
 
     for source_col, target_col in list_columns.items():
@@ -272,6 +279,18 @@ def add_list_count_features(df: pd.DataFrame) -> pd.DataFrame:
         else:
             logger.warning(f"Column {source_col} not found, setting {target_col} to 0")
             result[target_col] = 0
+
+    # Attributes column (dict - count keys)
+    if "enriched_item_attributes" in result.columns:
+        result["item_attributes_count"] = (
+            result["enriched_item_attributes"]
+            .apply(lambda x: _safe_parse_json_or_list(x, count_dict_keys=True))
+            .apply(len)
+        )
+        logger.debug("Added item_attributes_count from enriched_item_attributes")
+    else:
+        logger.warning("Column enriched_item_attributes not found, setting item_attributes_count to 0")
+        result["item_attributes_count"] = 0
 
     logger.info("List count features added")
     return result

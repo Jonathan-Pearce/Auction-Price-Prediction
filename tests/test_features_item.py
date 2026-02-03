@@ -298,10 +298,9 @@ class TestListCountFeatures:
         result = add_list_count_features(merged_df)
 
         assert "item_attributes_count" in result.columns
-        # Row 0: {"color": "brown", "material": "wood"} is a dict, not list
-        # When it's a dict, it should count as 1 item (or the dict itself)
-        # Based on our implementation, dict gets wrapped in list = 1
-        assert result["item_attributes_count"].iloc[0] == 1
+        # Row 0: {"color": "brown", "material": "wood"} has 2 keys
+        # For dicts, we count the number of keys (attributes)
+        assert result["item_attributes_count"].iloc[0] == 2
 
 
 # =============================================================================

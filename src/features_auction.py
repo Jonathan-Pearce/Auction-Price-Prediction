@@ -493,7 +493,7 @@ def select_final_columns(df: pd.DataFrame) -> pd.DataFrame:
         "auction_removal_info",
         "auction_partner_url",
         "auction_pickup_time",
-        "auction_fsa",  # Keep FSA-derived features but not raw FSA
+        "auction_fsa",  # Drop raw FSA, keep only FSA-derived features (postal_zone)
     ]
 
     # Get all columns that start with auction_

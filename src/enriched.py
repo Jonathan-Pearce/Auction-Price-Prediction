@@ -52,8 +52,8 @@ def load_population_data() -> pd.DataFrame:
     if first_col != "GEO":
         df = df.rename(columns={first_col: "GEO"})
 
-    # Remove aggregate rows (e.g., "Canada 2", "Province names")
-    df = df[df["GEO"].str.len() == 3].copy()
+    # Remove aggregate rows (e.g., "Canada 2", "Province names") and nulls
+    df = df[df["GEO"].notna() & (df["GEO"].str.len() == 3)].copy()
 
     # Ensure GEO is uppercase
     df["GEO"] = df["GEO"].str.upper()
@@ -101,8 +101,8 @@ def load_tax_statistics() -> pd.DataFrame:
     }
     df = df.rename(columns=column_mapping)
 
-    # Remove aggregate rows (e.g., "TOTAL")
-    df = df[df["FSA"].str.len() == 3].copy()
+    # Remove aggregate rows (e.g., "TOTAL") and nulls
+    df = df[df["FSA"].notna() & (df["FSA"].str.len() == 3)].copy()
 
     # Calculate average total income (Total Income / Number of Returns)
     # Values in CSV are in thousands, so multiply by 1000

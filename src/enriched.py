@@ -8,13 +8,10 @@ These datasets are based on Canadian Forward Sortation Areas (FSA) and provide
 geographic context for auction price predictions.
 """
 
-from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
 from src.config import settings
-
 
 # =============================================================================
 # Data Loading
@@ -49,6 +46,15 @@ def load_population_data() -> pd.DataFrame:
     # Clean column names (remove trailing spaces)
     df.columns = df.columns.str.strip()
 
+    # Rename first column to GEO for consistency
+    # The CSV has "Population and dwelling counts" as the first column name
+    first_col = df.columns[0]
+    if first_col != "GEO":
+        df = df.rename(columns={first_col: "GEO"})
+
+    # Remove aggregate rows (e.g., "Canada 2", "Province names")
+    df = df[df["GEO"].str.len() == 3].copy()
+
     # Ensure GEO is uppercase
     df["GEO"] = df["GEO"].str.upper()
 
@@ -62,10 +68,11 @@ def load_tax_statistics() -> pd.DataFrame:
     Returns:
         DataFrame with columns:
         - FSA: Forward Sortation Area (str)
-        - Number of Returns: Total tax returns (int)
-        - Total Income: Aggregate income in dollars (int)
-        - Median Total Income: Median income in dollars (int)
-        - Average Total Income: Average income in dollars (int)
+        - Number of Returns: Total tax returns filed (int)
+        - Total Income: Aggregate total income (int)
+        - Net Income: Aggregate net income (int)
+        - Taxable Income: Aggregate taxable income (int)
+        - Average Total Income: Calculated average income (float)
 
     Raises:
         FileNotFoundError: If the CSV file is not found
@@ -80,6 +87,30 @@ def load_tax_statistics() -> pd.DataFrame:
         )
 
     df = pd.read_csv(data_path)
+
+    # Clean column names (remove trailing spaces)
+    df.columns = df.columns.str.strip()
+
+    # Rename columns to match expected naming convention
+    # CSV has: FSA, Total, Total income, Net income, Taxable income
+    column_mapping = {
+        "Total": "Number of Returns",
+        "Total income": "Total Income",
+        "Net income": "Net Income",
+        "Taxable income": "Taxable Income",
+    }
+    df = df.rename(columns=column_mapping)
+
+    # Remove aggregate rows (e.g., "TOTAL")
+    df = df[df["FSA"].str.len() == 3].copy()
+
+    # Calculate average total income (Total Income / Number of Returns)
+    # Values in CSV are in thousands, so multiply by 1000
+    df["Average Total Income"] = (df["Total Income"] * 1000) / df["Number of Returns"]
+
+    # Add placeholder for Median (not available in this dataset)
+    # Use average as a proxy
+    df["Median Total Income"] = df["Average Total Income"]
 
     # Ensure FSA is uppercase
     df["FSA"] = df["FSA"].str.upper()
@@ -122,7 +153,7 @@ def load_all_enriched_data() -> pd.DataFrame:
 # =============================================================================
 
 
-def extract_fsa(postal_code: Optional[str]) -> Optional[str]:
+def extract_fsa(postal_code: str | None) -> str | None:
     """
     Extract Forward Sortation Area (first 3 characters) from postal code.
 
@@ -185,7 +216,7 @@ def add_fsa_column(df: pd.DataFrame, postal_code_col: str = "postal_code") -> pd
 def enrich_with_demographics(
     df: pd.DataFrame,
     postal_code_col: str = "postal_code",
-    fsa_col: Optional[str] = None,
+    fsa_col: str | None = None,
 ) -> pd.DataFrame:
     """
     Enrich DataFrame with demographic and economic data by FSA.

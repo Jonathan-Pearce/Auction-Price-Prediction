@@ -28,6 +28,7 @@ data/external/*
 # -----------------------------------------------------------------------------
 models/*
 !models/.gitkeep
+!models/mobilenet_v3_small_Opset17.onnx
 *.pt
 *.pth
 *.onnx

@@ -29,8 +29,8 @@ api:
 # Rate Limiting Configuration
 # =============================================================================
 rate_limiting:
-  requests_per_second: 10
-  concurrent_requests: 5  # maximum concurrent auction fetches
+  requests_per_second: 20  # Increased for faster scraping
+  concurrent_requests: 10  # Increased concurrent processing
 
 # =============================================================================
 # Data Field Configuration
@@ -185,6 +185,9 @@ storage:
     enriched_auction_raw_directory: "data/raw/enriched_auctions"
     enriched_auction_processed_directory: "data/processed/enriched_auctions"
     enriched_auction_data_filename: "enriched_auction_data.parquet"
+    image_raw_directory: "data/raw/images"
+    image_processed_directory: "data/processed/images"
+    image_data_filename: "image_embeddings.parquet"
     metadata_filename: "metadata.json"
   
   # Progress tracking
@@ -199,6 +202,7 @@ storage:
     item_data_repo: "jpearce610/item_data"
     item_id_column: "item_id"
     enriched_auction_progress_filename: "enriched_auction_scraper_progress.json"
+    image_progress_filename: "image_scraper_progress.json"
 
 # =============================================================================
 # Parallel Processing Configuration
@@ -212,9 +216,9 @@ parallel_processing:
   
   # Parallel workers
   workers:
-    default_max: 5
+    default_max: 15  # Increased for better parallelism
     min: 1
-    max: 20
+    max: 50  # Allow more workers if needed
 
 # =============================================================================
 # Hugging Face Configuration
@@ -290,6 +294,48 @@ huggingface:
   enriched_auction_upload_files:
     - enriched_auction_data.parquet
     - metadata.json
+  
+  # Image embedding dataset metadata
+  image_dataset:
+    name: "maxsold-image-embeddings"
+    description: "MaxSold auction item image embeddings extracted using MobileNetV3"
+    license: "cc-by-4.0"
+    tags:
+      - auction
+      - price-prediction
+      - e-commerce
+      - maxsold
+      - images
+      - embeddings
+      - mobilenetv3
+  
+  # Image files to upload
+  image_upload_files:
+    - image_embeddings.parquet
+    - metadata.json
+
+# =============================================================================
+# Image Processing Configuration
+# =============================================================================
+image_processing:
+  # Model configuration
+  model:
+    onnx_file: "models/mobilenet_v3_small_Opset17.onnx"
+    embedding_dim: 576  # Second-to-last layer output dimension
+    input_size: 224  # Model input size (224x224)
+  
+  # Image preprocessing
+  preprocessing:
+    max_dimension: 224  # Resize to max 224 pixels maintaining aspect ratio
+    target_size: [224, 224]  # Final size after padding/cropping
+    mean: [0.485, 0.456, 0.406]  # ImageNet normalization mean
+    std: [0.229, 0.224, 0.225]  # ImageNet normalization std
+  
+  # HTTP settings for image download
+  http:
+    timeout: 15  # Reduced timeout for faster failures
+    max_retries: 2  # Reduced retries for faster failure handling
+    retry_delay: 0.5  # Faster retry delay
 
 # =============================================================================
 # Validation Configuration

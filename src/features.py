@@ -6,6 +6,7 @@ Feature engineering pipeline for auction price prediction.
 
 Transforms raw auction, item, and bid data into features for ML models:
 - Tabular features: Numerical and categorical from auction/item metadata
+- Datetime features: Temporal transformations for all datetime variables
 - Text features: Processed item descriptions and titles
 - Image features: Extracted from item photos (via pretrained models)
 - Sequential features: Bid history time series
@@ -18,8 +19,11 @@ import pandas as pd
 from bs4 import BeautifulSoup
 from loguru import logger
 
-from src.config import settings
-
+from src.datetime_features import (
+    DatetimeFeatureEngineer,
+    add_auction_duration_features,
+    add_bid_timing_features,
+)
 
 # =============================================================================
 # Tabular Features
@@ -158,11 +162,10 @@ def engineer_auction_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Engineer features from auction-level data.
 
-    Features to consider:
+    Features include:
     - Auction type (estate sale, moving sale, reseller, etc.)
     - Location (city, state/province, region)
-    - Day of week / time of day auction ends
-    - Season / month
+    - Datetime features: day of week, time of day, season, holidays
     - Total number of items in auction
     - Auction duration
     - Pickup window features (day, hours, number of windows)
@@ -191,10 +194,36 @@ def engineer_auction_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # TODO: Implement additional auction-level feature engineering
     # Example features:
-    # - features['auction_item_count'] = ...
-    # - features['auction_day_of_week'] = ...
-    # - features['auction_is_weekend'] = ...
+    # Initialize datetime feature engineer
+    dt_engineer = DatetimeFeatureEngineer(
+        include_cyclical=True,
+        include_holidays=True,
+        region="both",
+    )
 
+    # Add datetime features for auction start time
+    if "start_time" in features.columns:
+        features = dt_engineer.add_datetime_features(
+            features, "start_time", prefix="auction_start_"
+        )
+
+    # Add datetime features for auction end time
+    if "end_time" in features.columns:
+        features = dt_engineer.add_datetime_features(
+            features, "end_time", prefix="auction_end_"
+        )
+
+    # Add auction duration features
+    if "start_time" in features.columns and "end_time" in features.columns:
+        features = add_auction_duration_features(
+            features, start_col="start_time", end_col="end_time"
+        )
+
+    # Additional features can be added here:
+    # - features['auction_item_count'] = ...
+    # - features['location_encoded'] = ...
+
+    logger.info(f"Auction features shape: {features.shape}")
     return features
 
 
@@ -233,7 +262,7 @@ def engineer_bid_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Engineer features from bid history.
 
-    Features to consider:
+    Features include:
     - Number of bids
     - Number of unique bidders
     - Bid velocity (bids per hour)
@@ -242,6 +271,7 @@ def engineer_bid_features(df: pd.DataFrame) -> pd.DataFrame:
     - Time since last bid
     - Soft-close extensions count
     - Early vs late bidding ratio
+    - Bid timing features (time of day, day of week, etc.)
 
     Args:
         df: Raw bid DataFrame (for a single item or aggregated)
@@ -252,12 +282,35 @@ def engineer_bid_features(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Engineering bid features...")
     features = df.copy()
 
-    # TODO: Implement bid-level feature engineering
-    # Example features:
+    # Initialize datetime feature engineer
+    dt_engineer = DatetimeFeatureEngineer(
+        include_cyclical=True,
+        include_holidays=True,
+        region="both",
+    )
+
+    # Add datetime features for bid time
+    if "bid_time" in features.columns:
+        features = dt_engineer.add_datetime_features(
+            features, "bid_time", prefix="bid_"
+        )
+
+    # Add bid timing features relative to auction lifecycle
+    required_cols = {"bid_time", "auction_start_time", "auction_end_time"}
+    if required_cols.issubset(features.columns):
+        features = add_bid_timing_features(
+            features,
+            bid_time_col="bid_time",
+            auction_start_col="auction_start_time",
+            auction_end_col="auction_end_time",
+        )
+
+    # Additional features can be added here:
     # - features['num_bids'] = ...
     # - features['num_unique_bidders'] = ...
     # - features['bid_velocity'] = ...
 
+    logger.info(f"Bid features shape: {features.shape}")
     return features
 
 

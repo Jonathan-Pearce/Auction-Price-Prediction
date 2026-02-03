@@ -10,7 +10,7 @@ Components:
 - schemas: Pydantic models for data validation
 """
 
-from src.data.schemas import Auction, Item, Bid, AuctionResponse
 from src.data.maxsold_client import MaxSoldClient
+from src.data.schemas import Auction, AuctionResponse, Bid, Item
 
 __all__ = ["Auction", "Item", "Bid", "AuctionResponse", "MaxSoldClient"]

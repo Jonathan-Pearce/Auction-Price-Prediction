@@ -74,14 +74,16 @@ def preprocess_text(
     1. Handle None/NaN values
     2. Lowercase all text
     3. Remove punctuation and special symbols
-    4. Remove numbers (configurable)
+    4. Remove pure numeric tokens (configurable)
     5. Tokenize
     6. Remove stopwords
 
     Args:
         text: Raw text string (title or description).
         stopwords_set: Set of stopwords to remove. If None, loads NLTK stopwords.
-        remove_numbers: Whether to remove numeric tokens.
+        remove_numbers: Whether to remove pure numeric tokens. When True, removes
+            standalone numbers like "500" or "1950" but keeps alphanumeric tokens
+            like "1920s" which are domain-relevant for auctions.
 
     Returns:
         List of preprocessed tokens.

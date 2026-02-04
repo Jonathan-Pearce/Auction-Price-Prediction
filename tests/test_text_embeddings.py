@@ -265,9 +265,11 @@ class TestPrepareTrainingCorpus:
         """Test that items with missing text are handled."""
         corpus = prepare_training_corpus(sample_item_df)
 
-        # Should have entries for items with at least some text
-        # Item 3 has no title but has description, Item 4 has title but no description
-        assert len(corpus) >= 2
+        # All 4 items have at least some text (title or description)
+        # Item 1, 2: both title and description
+        # Item 3: description only (title is None)
+        # Item 4: title only (description is None)
+        assert len(corpus) == 4
 
 
 # =============================================================================

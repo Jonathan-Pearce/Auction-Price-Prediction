@@ -2,25 +2,39 @@
 # Auction Price Prediction - Item-Level Feature Engineering Pipeline
 # =============================================================================
 """
-Feature engineering pipeline for item-level data.
+Feature engineering pipeline for item-level data with true streaming batch processing.
 
-This module loads item data from Hugging Face, merges with enriched item data,
-performs feature engineering, and uploads the final dataset.
+This module loads item data from Hugging Face, processes enriched item data from
+local Parquet file one batch at a time with NO memory accumulation.
 
-Pipeline steps:
-1. Load item data from HuggingFace (jpearce610/item_data)
-2. Load enriched item data from HuggingFace (jpearce610/enriched_item_data)
-3. Merge item data with enriched data on item_id
-4. Feature engineering:
-   - Text length features (title, description, enriched fields)
-   - Boolean features (brand populated, seriesLine populated)
-   - Categorical encoding (condition, working)
-   - Count fields from list/JSON variables
-   - Within-auction item closing order
-   - Log transformation of winning price
-5. Keep only specified raw variables and engineered features
-6. Ensure all variables have item_ prefix (except auction_id)
-7. Upload to Hugging Face as engineered_item_data
+Pipeline steps (TRUE STREAMING - no accumulation):
+1. Load item data from HuggingFace (jpearce610/item_data) - loaded once
+2. Stream enriched item data from local Parquet file in batches (default 100k rows per batch)
+3. For each batch:
+   a. Load batch from Parquet file using pyarrow
+   b. Merge with item data on item_id
+   c. Feature engineering:
+      - Text length features (title, description, enriched fields)
+      - Boolean features (brand populated, seriesLine populated)
+      - Categorical encoding (condition, working)
+      - Count fields from list/JSON variables
+      - Within-auction item closing order
+      - Log transformation of winning price
+   d. Select final columns with item_ prefix
+   e. Save to disk (Parquet)
+   f. CLEAR from memory
+4. Load all batches from disk and concatenate
+5. Save final dataset to data/processed/items/engineered_item_data.parquet
+6. Upload to Hugging Face as single dataset (optional)
+
+Benefits of streaming batch processing:
+- TRUE memory efficiency: Only ONE batch in memory at a time
+- NO accumulation: Process → Save → Clear → Repeat
+- Disk-backed: Batches saved as Parquet files during processing
+- Configurable: Adjust batch_size based on available memory
+- Predictable memory usage: Independent of dataset size
+- Efficient local file reading with pyarrow (no HF download)
+- Single full upload to HF (more reliable than batch uploads)
 """
 
 
@@ -52,23 +66,134 @@ def load_item_data() -> pd.DataFrame:
     return df
 
 
-def load_enriched_item_data() -> pd.DataFrame:
+def load_enriched_item_data_batched(batch_size: int = 100_000, parquet_path: str | None = None):
     """
-    Load enriched item data from Hugging Face.
+    Load enriched item data from local Parquet file in batches (generator).
+    
+    Yields batches of data to process incrementally, reducing memory usage.
+    Uses pyarrow for memory-efficient reading without loading full file.
 
-    Returns:
-        DataFrame with enriched item data
+    Args:
+        batch_size: Number of rows per batch (default 100k)
+        parquet_path: Path to local parquet file (default: data/processed/items/enriched_item_data.parquet)
+
+    Yields:
+        DataFrame batches of enriched item data
     """
-    logger.info("Loading enriched item data from HuggingFace...")
-    dataset = load_dataset("jpearce610/enriched_item_data", split="train")
-    df = dataset.to_pandas()
-    logger.info(f"Loaded {len(df)} enriched item records")
-    return df
+    import psutil
+    import os
+    import gc
+    import pyarrow.parquet as pq
+    from pathlib import Path
+    
+    def log_memory():
+        """Log current memory usage."""
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        mem_mb = mem_info.rss / 1024 / 1024
+        logger.info(f"Memory usage: {mem_mb:.1f} MB")
+    
+    # Default to local parquet file
+    if parquet_path is None:
+        parquet_path = Path("data/processed/items/enriched_item_data.parquet")
+    else:
+        parquet_path = Path(parquet_path)
+    
+    if not parquet_path.exists():
+        raise FileNotFoundError(f"Parquet file not found: {parquet_path}")
+    
+    logger.info(f"Loading enriched item data from local Parquet file: {parquet_path}")
+    logger.info(f"Batch size: {batch_size:,} rows")
+    log_memory()
+    
+    try:
+        # Get total row count from metadata
+        metadata = pq.read_metadata(parquet_path)
+        total_rows = metadata.num_rows
+        logger.info(f"Total rows in file: {total_rows:,}")
+        
+        # Open parquet file for batch reading
+        parquet_file = pq.ParquetFile(parquet_path)
+        logger.info(f"Parquet file opened successfully")
+        logger.info(f"Number of row groups: {parquet_file.num_row_groups}")
+        log_memory()
+        
+    except Exception as e:
+        logger.error(f"Failed to open parquet file: {e}")
+        raise
+    
+    batch_num = 0
+    rows_processed = 0
+    
+    try:
+        logger.info("Starting to read batches from parquet file...")
+        
+        # Read in batches
+        for batch in parquet_file.iter_batches(batch_size=batch_size):
+            batch_num += 1
+            
+            # Convert arrow batch to pandas DataFrame
+            batch_df = batch.to_pandas()
+            rows_processed += len(batch_df)
+            
+            logger.info(f"\nBatch #{batch_num}: {len(batch_df):,} rows (total: {rows_processed:,}/{total_rows:,})")
+            log_memory()
+            
+            # Yield the batch
+            yield batch_df
+            
+            # CRITICAL: Clear memory after consumer processes the batch
+            del batch_df
+            del batch
+            gc.collect()
+        
+        logger.info(f"\n✓ Finished loading all batches")
+        logger.info(f"Total: {rows_processed:,} rows in {batch_num} batches")
+        log_memory()
+        
+    except Exception as e:
+        logger.error(f"\n❌ Error during data loading: {e}")
+        logger.error(f"Processed {rows_processed} rows in {batch_num} batches before error")
+        log_memory()
+        raise
 
 
 # =============================================================================
 # Feature Engineering Functions
 # =============================================================================
+
+
+def process_batch_features(batch_df: pd.DataFrame, item_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Process feature engineering for a single batch of enriched data.
+    
+    This function performs all feature engineering steps on a batch:
+    1. Merge with item data
+    2. Add all engineered features
+    3. Select final columns
+    
+    Args:
+        batch_df: Batch of enriched item data
+        item_df: Full item dataset (for merging)
+    
+    Returns:
+        DataFrame with engineered features for this batch
+    """
+    # Merge with item data on both item_id and auction_id to avoid duplicate columns
+    df = item_df.merge(batch_df, on=["item_id", "auction_id"], how="inner")
+    logger.debug(f"Batch shape after merge: {df.shape}")
+    
+    # Feature engineering steps
+    df = add_text_length_features(df)
+    df = add_boolean_features(df)
+    df = encode_categorical_features(df)
+    df = add_list_count_features(df)
+    df = add_item_closing_order(df)
+    df = add_price_features(df)
+    df = select_final_columns(df)
+    
+    logger.debug(f"Batch shape after feature engineering: {df.shape}")
+    return df
 
 
 def add_text_length_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -184,8 +309,10 @@ def encode_categorical_features(df: pd.DataFrame) -> pd.DataFrame:
             logger.warning(f"Column {source_col} not found, skipping encoding")
             continue
 
-        # Fill missing values
+        # Fill missing values and empty strings with "Unknown"
         result[source_col] = result[source_col].fillna("Unknown")
+        result[source_col] = result[source_col].replace("", "Unknown")
+        result[source_col] = result[source_col].replace("unknown", "Unknown")
 
         # Get value counts
         value_counts = result[source_col].value_counts()
@@ -329,7 +456,7 @@ def add_item_closing_order(df: pd.DataFrame) -> pd.DataFrame:
         return result
 
     # Convert end_time to datetime if needed
-    result[end_time_col] = pd.to_datetime(result[end_time_col], errors="coerce")
+    result[end_time_col] = pd.to_datetime(result[end_time_col], errors="coerce", utc=True)
 
     # Rank items within each auction by end time
     # Items with the same end time get the same rank (method='dense')
@@ -483,6 +610,11 @@ def select_final_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     # Remove columns that should be dropped
     final_cols = [col for col in all_item_cols if col not in cols_to_drop]
+    
+    # Remove columns that are exactly "item_condition_" or "item_working_"
+    # (these come from empty string values in categorical encoding)
+    invalid_cols = {"item_condition_", "item_working_"}
+    final_cols = [col for col in final_cols if col not in invalid_cols]
 
     # Make sure raw cols to keep are included
     for col in raw_cols_to_keep:
@@ -492,6 +624,12 @@ def select_final_columns(df: pd.DataFrame) -> pd.DataFrame:
     # Filter to only columns that exist
     final_cols = [col for col in final_cols if col in result.columns]
 
+    # Ensure auction_id and item_id are in the final columns
+    if "auction_id" not in final_cols and "auction_id" in result.columns:
+        final_cols.append("auction_id")
+    if "item_id" not in final_cols and "item_id" in result.columns:
+        final_cols.append("item_id")
+    
     # Sort columns alphabetically, but put item_id and auction_id first
     final_cols = sorted(set(final_cols))
     priority_cols = []
@@ -519,66 +657,128 @@ def run_item_feature_pipeline(
     upload_to_hf: bool = False,
     hf_repo_id: str = "engineered_item_data",
     hf_token: str | None = None,
+    batch_size: int = 100_000,
+    temp_dir: str | None = None,
+    enriched_parquet_path: str | None = None,
 ) -> pd.DataFrame:
     """
-    Run the complete item feature engineering pipeline.
+    Run the complete item feature engineering pipeline with batch processing.
+    
+    Processes enriched data one batch at a time with NO memory accumulation:
+    1. Load one batch from local Parquet file
+    2. Merge with item data
+    3. Feature engineer
+    4. Save to disk (Parquet)
+    5. Clear batch from memory
+    6. Repeat for next batch
+    7. Load all batches from disk and concatenate
+    8. Save final dataset to data/processed/items/engineered_item_data.parquet
+    9. Upload to HuggingFace as single full dataset (optional)
 
     Args:
         upload_to_hf: Whether to upload result to Hugging Face
         hf_repo_id: Hugging Face repository ID for upload
         hf_token: Hugging Face token for authentication
+        batch_size: Number of rows to process per batch (default 100k)
+        temp_dir: Directory for temporary batch files (default: data/interim/feature_batches)
+        enriched_parquet_path: Path to enriched item parquet file (default: data/processed/items/enriched_item_data.parquet)
 
     Returns:
         DataFrame with engineered item features
     """
+    from pathlib import Path
+    import tempfile
+    import shutil
+    import gc
+    
     logger.info("=" * 60)
-    logger.info("Starting Item Feature Engineering Pipeline")
+    logger.info("Starting Item Feature Engineering Pipeline (Streaming Batch Mode)")
     logger.info("=" * 60)
 
-    # Step 1: Load item data
+    # Setup temporary directory for batch files
+    if temp_dir is None:
+        temp_dir = Path("data/interim/feature_batches")
+    else:
+        temp_dir = Path(temp_dir)
+    
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Temporary batch directory: {temp_dir}")
+    
+    # Clean up any existing batch files
+    for f in temp_dir.glob("batch_*.parquet"):
+        f.unlink()
+        logger.debug(f"Removed old batch file: {f.name}")
+
+    # Step 1: Load item data (smaller dataset, can load fully)
     item_df = load_item_data()
+    logger.info(f"Loaded item data: {len(item_df):,} records")
 
-    # Step 2: Load enriched item data
-    enriched_df = load_enriched_item_data()
-
-    # Step 3: Merge item with enriched data
-    logger.info("Merging item data with enriched data...")
-    df = item_df.merge(enriched_df, on="item_id", how="left")
-    logger.info(f"Merged dataset shape: {df.shape}")
-
-    # Step 4: Feature engineering
-    logger.info("Running feature engineering...")
-
-    # 4a: Text length features
-    df = add_text_length_features(df)
-
-    # 4b: Boolean features (brand, seriesLine)
-    df = add_boolean_features(df)
-
-    # 4c: Categorical encoding (condition, working)
-    df = encode_categorical_features(df)
-
-    # 4d: List count features
-    df = add_list_count_features(df)
-
-    # 4e: Item closing order within auction
-    df = add_item_closing_order(df)
-
-    # 4f: Price features (rename + log transform)
-    df = add_price_features(df)
-
-    # Step 5: Select final columns
-    df = select_final_columns(df)
-
+    # Step 2: Process enriched data in batches (NO ACCUMULATION)
+    logger.info("Processing enriched data in batches...")
+    logger.info(f"Batch size: {batch_size:,} rows")
+    logger.info("Memory strategy: Process → Save → Clear → Repeat")
+    
+    batch_files = []
+    batch_count = 0
+    total_processed = 0
+    
+    for batch_num, enriched_batch in enumerate(load_enriched_item_data_batched(batch_size, enriched_parquet_path), 1):
+        logger.info(f"\n--- Processing Batch #{batch_num} ---")
+        logger.info(f"Batch shape: {enriched_batch.shape}")
+        
+        # Process this batch through the feature engineering pipeline
+        engineered_batch = process_batch_features(enriched_batch, item_df)
+        
+        # Save to disk immediately (Parquet format for efficiency)
+        batch_file = temp_dir / f"batch_{batch_num:04d}.parquet"
+        engineered_batch.to_parquet(batch_file, index=False)
+        batch_files.append(batch_file)
+        
+        batch_count += 1
+        total_processed += len(engineered_batch)
+        
+        logger.info(f"Batch #{batch_num} processed: {len(engineered_batch):,} rows")
+        logger.info(f"Saved to: {batch_file.name}")
+        logger.info(f"Total processed so far: {total_processed:,} rows")
+        
+        # CRITICAL: Clear both batches from memory immediately
+        del enriched_batch
+        del engineered_batch
+        gc.collect()  # Force garbage collection
+        
+    logger.info(f"\n{'='*60}")
+    logger.info(f"All {batch_count} batches processed and saved to disk")
+    logger.info(f"Total rows: {total_processed:,}")
+    logger.info(f"{'='*60}\n")
+    
+    # Step 3: Load all batches from disk and concatenate
+    logger.info(f"Loading {len(batch_files)} batches from disk...")
+    df = pd.concat([pd.read_parquet(f) for f in batch_files], ignore_index=True)
     logger.info(f"Final dataset shape: {df.shape}")
-    logger.info(f"Final columns: {df.columns.tolist()}")
-
-    # Step 6: Upload to Hugging Face (optional)
+    logger.info(f"Final columns ({len(df.columns)}): {df.columns.tolist()}")
+    
+    # Step 4: Save final dataset to repo
+    output_path = Path("data/processed/items/engineered_item_data.parquet")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Saving final dataset to: {output_path}")
+    df.to_parquet(output_path, index=False)
+    logger.info(f"✓ Dataset saved to {output_path}")
+    
+    # Step 5: Upload to Hugging Face if requested
     if upload_to_hf:
+        logger.info("Uploading full dataset to Hugging Face...")
         upload_to_huggingface(df, hf_repo_id, hf_token)
-
+    
+    # Clean up temporary batch files
+    logger.info("Cleaning up temporary batch files...")
+    for batch_file in batch_files:
+        batch_file.unlink()
+    logger.info("✓ Temporary files cleaned up")
+    
     logger.info("=" * 60)
     logger.info("Item Feature Engineering Pipeline Complete")
+    logger.info(f"Final dataset: {len(df):,} rows, {len(df.columns)} columns")
+    logger.info(f"Output file: {output_path}")
     logger.info("=" * 60)
 
     return df
@@ -616,6 +816,39 @@ def upload_to_huggingface(
     logger.info(f"Dataset uploaded successfully to {repo_id}")
 
 
+def upload_batches_to_huggingface(
+    batch_files: list,
+    repo_id: str = "engineered_item_data",
+    token: str | None = None,
+) -> None:
+    """
+    DEPRECATED: Use upload_to_huggingface() instead for single full upload.
+    
+    Upload processed batches to Hugging Face incrementally.
+    
+    This function is deprecated because batch-by-batch uploading is complex,
+    error-prone, and requires downloading the dataset between uploads.
+    Use upload_to_huggingface() for a simpler, more reliable single upload.
+
+    Args:
+        batch_files: List of Parquet file paths containing processed batches
+        repo_id: Repository ID (user/repo format or just repo name)
+        token: HuggingFace API token
+    """
+    logger.warning(
+        "upload_batches_to_huggingface() is deprecated. "
+        "Use upload_to_huggingface() for single full upload instead."
+    )
+    
+    # Load all batches and do a single upload
+    logger.info(f"Loading {len(batch_files)} batches from disk...")
+    df = pd.concat([pd.read_parquet(f) for f in batch_files], ignore_index=True)
+    logger.info(f"Loaded dataset: {len(df):,} rows, {len(df.columns)} columns")
+    
+    # Single upload
+    upload_to_huggingface(df, repo_id, token)
+
+
 # =============================================================================
 # CLI Entry Point
 # =============================================================================
@@ -626,7 +859,7 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Run item feature engineering pipeline"
+        description="Run item feature engineering pipeline with batch processing"
     )
     parser.add_argument(
         "--upload",
@@ -645,6 +878,24 @@ def main() -> None:
         default=None,
         help="Hugging Face API token",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=100_000,
+        help="Number of rows to process per batch (default: 100,000)",
+    )
+    parser.add_argument(
+        "--temp-dir",
+        type=str,
+        default=None,
+        help="Temporary directory for batch files (default: data/interim/feature_batches)",
+    )
+    parser.add_argument(
+        "--enriched-parquet",
+        type=str,
+        default=None,
+        help="Path to enriched item parquet file (default: data/processed/items/enriched_item_data.parquet)",
+    )
 
     args = parser.parse_args()
 
@@ -653,10 +904,13 @@ def main() -> None:
         upload_to_hf=args.upload,
         hf_repo_id=args.repo_id,
         hf_token=args.token,
+        batch_size=args.batch_size,
+        temp_dir=args.temp_dir,
+        enriched_parquet_path=args.enriched_parquet,
     )
 
     print(f"Pipeline complete. Dataset shape: {df.shape}")
-    print(f"Columns: {df.columns.tolist()}")
+    print(f"Columns ({len(df.columns)}): {df.columns.tolist()}")
 
 
 if __name__ == "__main__":

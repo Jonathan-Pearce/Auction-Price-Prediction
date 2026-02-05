@@ -251,6 +251,32 @@ class TestCategoricalEncoding:
         # Check that Unknown column exists for condition
         assert "item_condition_unknown" in result.columns
 
+    def test_empty_strings_converted_to_unknown(self):
+        """Test that empty strings in categorical columns are converted to Unknown."""
+        test_df = pd.DataFrame({
+            "item_id": [1, 2, 3],
+            "enriched_item_condition": ["new", "", None],
+            "enriched_item_working": ["tested & working", "", None],
+        })
+        
+        result = encode_categorical_features(test_df)
+        
+        # Empty strings should be converted to "Unknown", so no columns should end with just "_"
+        condition_cols = [c for c in result.columns if c.startswith("item_condition_")]
+        working_cols = [c for c in result.columns if c.startswith("item_working_")]
+        
+        # Should not have columns that end with just the prefix + "_"
+        assert "item_condition_" not in condition_cols
+        assert "item_working_" not in working_cols
+        
+        # Should have unknown columns
+        assert "item_condition_unknown" in condition_cols
+        assert "item_working_unknown" in working_cols
+        
+        # Verify row 2 (empty string) is encoded as Unknown
+        assert result["item_condition_unknown"].iloc[1] == 1
+        assert result["item_working_unknown"].iloc[1] == 1
+
 
 # =============================================================================
 # Test List Count Features
@@ -452,3 +478,25 @@ class TestSelectFinalColumns:
         assert "enriched_item_condition" not in result.columns
         assert "item_enriched_title_length" in result.columns
         assert "item_condition_good" in result.columns
+
+    def test_empty_string_columns_filtered(self):
+        """Test that columns from empty string encoding are filtered out."""
+        df = pd.DataFrame(
+            {
+                "item_id": [1, 2],
+                "auction_id": [100, 101],
+                "item_condition_good": [1, 0],
+                "item_condition_": [0, 1],  # From empty string - should be removed
+                "item_working_tested_&_working": [1, 0],
+                "item_working_": [0, 1],  # From empty string - should be removed
+            }
+        )
+        result = select_final_columns(df)
+
+        # Valid columns should be kept
+        assert "item_condition_good" in result.columns
+        assert "item_working_tested_&_working" in result.columns
+        
+        # Problematic columns should be removed
+        assert "item_condition_" not in result.columns
+        assert "item_working_" not in result.columns

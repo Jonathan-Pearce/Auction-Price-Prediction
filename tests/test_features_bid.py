@@ -119,39 +119,55 @@ class TestBidIncrementRules:
     """Tests for MaxSold bid increment rule functions."""
 
     def test_get_expected_increment_low_bid(self):
-        """Test expected increment for low bids ($0-$25)."""
+        """Test expected increment for low bids ($0-$10)."""
         assert get_expected_increment(5) == 1
-        assert get_expected_increment(20) == 1
-        assert get_expected_increment(24.99) == 1
+        assert get_expected_increment(9.99) == 1
 
     def test_get_expected_increment_medium_bid(self):
-        """Test expected increment for medium bids ($25-$100)."""
-        assert get_expected_increment(25) == 5
+        """Test expected increment for medium bids ($10-$100)."""
+        # $10.01 to $40.00: $3.00 increments
+        assert get_expected_increment(10) == 3
+        assert get_expected_increment(25) == 3
+        assert get_expected_increment(39.99) == 3
+        # $40.01 to $100.00: $5.00 increments
+        assert get_expected_increment(40) == 5
         assert get_expected_increment(50) == 5
         assert get_expected_increment(99.99) == 5
 
     def test_get_expected_increment_high_bid(self):
         """Test expected increment for higher bids."""
+        # $100.01 to $1,000.00: $10.00 increments
         assert get_expected_increment(100) == 10
-        assert get_expected_increment(500) == 25
+        assert get_expected_increment(500) == 10
+        assert get_expected_increment(999.99) == 10
+        # $1,000.01 to $5,000.00: $50.00 increments
         assert get_expected_increment(1000) == 50
+        assert get_expected_increment(3000) == 50
+        # $5,000.01 to $10,000.00: $100.00 increments
         assert get_expected_increment(5000) == 100
-        assert get_expected_increment(10000) == 100
+        assert get_expected_increment(9999.99) == 100
+        # $10,000.01+: $250.00 increments
+        assert get_expected_increment(10000) == 250
+        assert get_expected_increment(50000) == 250
 
     def test_is_unusual_increment_normal(self):
         """Test normal increments are not flagged."""
-        # Normal $1 increment at $5
+        # Normal $1 increment at $5 (in $0-$10 range)
         assert not is_unusual_increment(5, 6)
-        # Normal $5 increment at $50
+        # Normal $5 increment at $50 (in $40-$100 range, $5 increments)
         assert not is_unusual_increment(50, 55)
-        # Normal $10 increment at $100
+        # Normal $10 increment at $100 (in $100-$1000 range, $10 increments)
         assert not is_unusual_increment(100, 110)
+        # Normal $3 increment at $25 (in $10-$40 range, $3 increments)
+        assert not is_unusual_increment(25, 28)
 
     def test_is_unusual_increment_too_small(self):
         """Test that too-small increments are flagged."""
-        # $0.50 increment when $1 expected - unusual
+        # $0.50 increment when $1 expected at $5 - unusual
         # Note: In real auction this wouldn't be allowed, but we flag it
         assert is_unusual_increment(5, 5.50)
+        # $2 increment when $3 expected at $25 - unusual
+        assert is_unusual_increment(25, 27)
 
     def test_is_unusual_increment_very_large(self):
         """Test that very large increments (>3x expected) are flagged."""

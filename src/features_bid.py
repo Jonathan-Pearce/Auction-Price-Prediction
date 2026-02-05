@@ -35,15 +35,17 @@ from src.config import settings
 # MaxSold Bid Increment Rules
 # =============================================================================
 
-# MaxSold bid increment rules (approximate based on common patterns)
+# MaxSold bid increment rules
+# Source: https://support.maxsold.com/hc/en-us/articles/203144054-How-do-bid-increments-work
 # These define the minimum increment required based on current bid amount
 MAXSOLD_BID_INCREMENTS = [
-    (0, 25, 1),        # $0-$25: $1 increments
-    (25, 100, 5),      # $25-$100: $5 increments
-    (100, 500, 10),    # $100-$500: $10 increments
-    (500, 1000, 25),   # $500-$1000: $25 increments
-    (1000, 5000, 50),  # $1000-$5000: $50 increments
-    (5000, float('inf'), 100),  # $5000+: $100 increments
+    (0, 10, 1),              # $0 to $10.00: $1.00 increments
+    (10, 40, 3),             # $10.01 to $40.00: $3.00 increments
+    (40, 100, 5),            # $40.01 to $100.00: $5.00 increments
+    (100, 1000, 10),         # $100.01 to $1,000.00: $10.00 increments
+    (1000, 5000, 50),        # $1,000.01 to $5,000.00: $50.00 increments
+    (5000, 10000, 100),      # $5,000.01 to $10,000.00: $100.00 increments
+    (10000, float('inf'), 250),  # $10,000.01+: $250.00 increments
 ]
 
 
@@ -63,7 +65,7 @@ def get_expected_increment(current_bid: float) -> float:
     for low, high, increment in MAXSOLD_BID_INCREMENTS:
         if low <= current_bid < high:
             return increment
-    return 100  # Default for very high bids
+    return 250  # Default for very high bids ($10,000.01+)
 
 
 def is_unusual_increment(previous_bid: float, current_bid: float) -> bool:

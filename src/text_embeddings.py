@@ -255,7 +255,7 @@ def train_fasttext_model(
     min_count: int = DEFAULT_MIN_COUNT,
     epochs: int = DEFAULT_EPOCHS,
     sg: int = 1,  # Skip-gram (1) vs CBOW (0)
-    workers: int = 4,
+    workers: int = 2,  # Reduce workers to save memory
 ) -> Any:
     """
     Train a FastText model on the corpus.
@@ -276,7 +276,8 @@ def train_fasttext_model(
 
     logger.info(
         f"Training FastText model (dim={vector_size}, window={window}, "
-        f"min_count={min_count}, epochs={epochs}, sg={'skip-gram' if sg else 'cbow'})..."
+        f"min_count={min_count}, epochs={epochs}, sg={'skip-gram' if sg else 'cbow'}, "
+        f"workers={workers})..."
     )
 
     model = FastText(
@@ -358,37 +359,180 @@ def evaluate_embeddings(model: Any, sample_words: list[str] | None = None) -> No
 def generate_item_embeddings(
     df: pd.DataFrame,
     model: Any,
-) -> pd.DataFrame:
+    batch_size: int = 5000,
+    checkpoint_dir: Path | str | None = None,
+) -> Path:
     """
-    Generate embeddings for all items.
+    Generate embeddings for all items with batch processing and checkpointing.
+    
+    Memory-efficient implementation: processes data in chunks and writes
+    directly to parquet files to avoid loading all embeddings in memory.
 
     Args:
         df: DataFrame with item_id, auction_id, item_title, item_description.
         model: Trained FastText model.
+        batch_size: Number of items to process before writing batch file.
+        checkpoint_dir: Directory to save batch files. If None, uses default.
 
     Returns:
-        DataFrame with auction_id, item_id, and embedding columns.
+        Path to directory containing embedding batch files.
     """
-    logger.info("Generating item embeddings...")
+    if checkpoint_dir is None:
+        checkpoint_dir = PROCESSED_DATA_DIR / "text_embeddings_batches"
+    else:
+        checkpoint_dir = Path(checkpoint_dir)
+
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Generating item embeddings with memory-efficient batching...")
     stopwords_set = get_stopwords()
 
-    embeddings = []
-    for _, row in df.iterrows():
+    # Find existing batch files and processed IDs
+    existing_batches = sorted(checkpoint_dir.glob("batch_*.parquet"))
+    processed_ids = set()
+    
+    if existing_batches:
+        logger.info(f"Found {len(existing_batches)} existing batch files")
+        for batch_file in existing_batches:
+            batch_df = pd.read_parquet(batch_file)
+            processed_ids.update(batch_df["item_id"].values)
+        logger.info(f"Resuming: {len(processed_ids)} items already processed")
+
+    # Process items in batches
+    total_items = len(df)
+    batch_num = len(existing_batches)
+    current_batch = []
+    items_processed = len(processed_ids)
+
+    for idx, row in df.iterrows():
+        item_id = row["item_id"]
+
+        # Skip if already processed
+        if item_id in processed_ids:
+            continue
+
         tokens = combine_title_description(
             row.get("item_title"), row.get("item_description"), stopwords_set
         )
         embedding = get_document_embedding(tokens, model)
-        embeddings.append(
+        current_batch.append(
             {
                 "auction_id": row["auction_id"],
-                "item_id": row["item_id"],
-                "embedding": embedding.tolist(),  # Convert to list for Parquet
+                "item_id": item_id,
+                "embedding": embedding.tolist(),
             }
         )
 
-    result_df = pd.DataFrame(embeddings)
-    logger.info(f"Generated embeddings for {len(result_df)} items")
-    return result_df
+        # Write batch file when batch_size is reached
+        if len(current_batch) >= batch_size:
+            batch_df = pd.DataFrame(current_batch)
+            batch_file = checkpoint_dir / f"batch_{batch_num:04d}.parquet"
+            batch_df.to_parquet(batch_file, index=False)
+            
+            items_processed += len(current_batch)
+            logger.info(
+                f"Batch {batch_num} saved: {items_processed}/{total_items} items "
+                f"({items_processed/total_items*100:.1f}%)"
+            )
+            
+            # Clear batch and increment counter
+            current_batch = []
+            batch_num += 1
+
+    # Write remaining items
+    if current_batch:
+        batch_df = pd.DataFrame(current_batch)
+        batch_file = checkpoint_dir / f"batch_{batch_num:04d}.parquet"
+        batch_df.to_parquet(batch_file, index=False)
+        items_processed += len(current_batch)
+        logger.info(f"Final batch {batch_num} saved: {items_processed} items total")
+
+    logger.info(f"All embeddings generated in {checkpoint_dir}")
+    return checkpoint_dir
+
+
+def merge_embedding_batches(
+    batch_dir: Path | str,
+    output_path: Path | str | None = None,
+    cleanup: bool = True,
+) -> Path:
+    """
+    Merge batch embedding files into a single parquet file using streaming.
+    
+    Memory-efficient: uses PyArrow to write batches incrementally without
+    loading all data into memory at once.
+
+    Args:
+        batch_dir: Directory containing batch_*.parquet files.
+        output_path: Output file path. Defaults to processed data directory.
+        cleanup: Whether to delete batch files after merging.
+
+    Returns:
+        Path to merged file.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    
+    batch_dir = Path(batch_dir)
+    
+    if output_path is None:
+        output_path = PROCESSED_DATA_DIR / "text_embeddings.parquet"
+    else:
+        output_path = Path(output_path)
+
+    logger.info(f"Merging embedding batches from {batch_dir} (streaming mode)...")
+    
+    batch_files = sorted(batch_dir.glob("batch_*.parquet"))
+    if not batch_files:
+        raise ValueError(f"No batch files found in {batch_dir}")
+
+    logger.info(f"Found {len(batch_files)} batch files to merge")
+    
+    # Ensure parent directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Stream merge: read batches one at a time and append to output file
+    writer = None
+    total_rows = 0
+    
+    try:
+        for i, batch_file in enumerate(batch_files):
+            # Read batch as PyArrow table (more memory efficient than pandas)
+            table = pq.read_table(batch_file)
+            
+            # Initialize writer with schema from first batch
+            if writer is None:
+                writer = pq.ParquetWriter(output_path, table.schema)
+            
+            # Write batch to output file
+            writer.write_table(table)
+            total_rows += len(table)
+            
+            # Log progress every 100 batches
+            if (i + 1) % 100 == 0 or i == len(batch_files) - 1:
+                logger.info(
+                    f"Progress: {i + 1}/{len(batch_files)} batches merged "
+                    f"({total_rows:,} items)"
+                )
+        
+        logger.info(f"Merged {total_rows:,} total embeddings to {output_path}")
+    
+    finally:
+        if writer is not None:
+            writer.close()
+    
+    # Optionally cleanup batch files
+    if cleanup:
+        logger.info("Cleaning up batch files...")
+        for batch_file in batch_files:
+            batch_file.unlink()
+        try:
+            batch_dir.rmdir()
+            logger.info("Batch directory removed")
+        except OSError:
+            logger.warning("Could not remove batch directory (may not be empty)")
+    
+    return output_path
 
 
 def save_embeddings_parquet(
@@ -582,7 +726,10 @@ def run_training_pipeline(
     epochs: int = DEFAULT_EPOCHS,
     upload: bool = False,
     hf_repo_id: str = "jpearce610/text_embeddings",
-) -> tuple[Any, pd.DataFrame, Path]:
+    batch_size: int = 5000,
+    resume: bool = False,
+    embeddings_only: bool = False,
+) -> tuple[Any, Path]:
     """
     Run the complete training pipeline.
 
@@ -594,43 +741,58 @@ def run_training_pipeline(
         epochs: Training epochs.
         upload: Whether to upload embeddings to Hugging Face.
         hf_repo_id: Hugging Face repository ID for upload.
+        batch_size: Number of items to process before saving checkpoint.
+        resume: Whether to resume from saved model and checkpoint.
+        embeddings_only: Skip training and only generate embeddings from saved model.
 
     Returns:
-        Tuple of (model, embeddings_df, embeddings_path).
+        Tuple of (model, embeddings_path).
     """
-    logger.info("Starting text embeddings training pipeline...")
+    logger.info("Starting text embeddings pipeline...")
 
     # 1. Load data
     df = load_item_data(limit=limit)
 
-    # 2. Prepare corpus
-    corpus = prepare_training_corpus(df)
+    # 2. Load or train model
+    model_path = MODELS_DIR / "fasttext_text_embeddings.model"
+    if embeddings_only or (resume and model_path.exists()):
+        if not model_path.exists():
+            raise FileNotFoundError(
+                f"Model not found at {model_path}. Cannot use --embeddings-only without trained model."
+            )
+        logger.info(f"Loading existing model from {model_path}")
+        model = load_model(model_path)
+    else:
+        # 2a. Prepare corpus
+        corpus = prepare_training_corpus(df)
 
-    # 3. Train model
-    model = train_fasttext_model(
-        corpus,
-        vector_size=vector_size,
-        window=window,
-        min_count=min_count,
-        epochs=epochs,
-    )
+        # 2b. Train model
+        model = train_fasttext_model(
+            corpus,
+            vector_size=vector_size,
+            window=window,
+            min_count=min_count,
+            epochs=epochs,
+        )
 
-    # 4. Evaluate model
-    evaluate_embeddings(model)
+        # 2c. Evaluate model
+        evaluate_embeddings(model)
 
-    # 5. Generate embeddings for all items
-    embeddings_df = generate_item_embeddings(df, model)
+        # 2d. Save model immediately
+        save_model(model)
 
-    # 6. Save model and embeddings
-    save_model(model)
-    embeddings_path = save_embeddings_parquet(embeddings_df)
+    # 3. Generate embeddings in batches (memory-efficient)
+    batch_dir = generate_item_embeddings(df, model, batch_size=batch_size)
 
-    # 7. Optionally upload to Hugging Face
+    # 4. Merge batches into final file
+    embeddings_path = merge_embedding_batches(batch_dir, cleanup=True)
+
+    # 5. Optionally upload to Hugging Face
     if upload:
         upload_to_huggingface(embeddings_path, repo_id=hf_repo_id)
 
-    logger.info("Training pipeline complete!")
-    return model, embeddings_df, embeddings_path
+    logger.info("Pipeline complete!")
+    return model, embeddings_path
 
 
 # =============================================================================
@@ -690,6 +852,22 @@ def main() -> None:
         help="Hugging Face repository ID for upload",
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=5000,
+        help="Number of items to process before saving checkpoint (default: 5000)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from saved model and checkpoint",
+    )
+    parser.add_argument(
+        "--embeddings-only",
+        action="store_true",
+        help="Skip training and only generate embeddings from existing model",
+    )
+    parser.add_argument(
         "--inference",
         action="store_true",
         help="Run inference mode with sample text",
@@ -709,7 +887,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if args.train:
+    if args.train or args.embeddings_only:
         run_training_pipeline(
             limit=args.limit,
             vector_size=args.vector_size,
@@ -718,6 +896,9 @@ def main() -> None:
             epochs=args.epochs,
             upload=args.upload,
             hf_repo_id=args.hf_repo_id,
+            batch_size=args.batch_size,
+            resume=args.resume,
+            embeddings_only=args.embeddings_only,
         )
     elif args.inference:
         if args.title is None and args.description is None:

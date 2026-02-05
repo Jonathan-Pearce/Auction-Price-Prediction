@@ -469,3 +469,55 @@ def test_bid_concentration_features(sample_bid_data):
     # All values should be between 0 and 1
     assert (features_df["bid_concentration_last_25pct"] >= 0).all()
     assert (features_df["bid_concentration_last_25pct"] <= 1).all()
+
+
+def test_velocity_features(sample_bid_data):
+    """Test velocity and acceleration feature extraction."""
+    extractor = BidFeatureExtractor()
+    features_df = extractor.extract_features(sample_bid_data)
+
+    # Check that velocity features exist
+    assert "bid_velocity" in features_df.columns
+    assert "bid_amount_velocity" in features_df.columns
+    assert "bid_acceleration" in features_df.columns
+    assert "bid_amount_acceleration" in features_df.columns
+    assert "max_bid_velocity" in features_df.columns
+    assert "final_bid_velocity" in features_df.columns
+
+    # Check item 101 (5 bids over 20 minutes)
+    item_101 = features_df[features_df["item_id"] == 101].iloc[0]
+
+    # Bid velocity: 5 bids / 20 minutes = 0.25 bids/min
+    assert abs(item_101["bid_velocity"] - 0.25) < 0.01
+
+    # Bid amount velocity: ($30 - $10) / 20 min = $1/min
+    assert abs(item_101["bid_amount_velocity"] - 1.0) < 0.01
+
+    # Values should be non-negative for velocity
+    assert item_101["bid_velocity"] >= 0
+    assert item_101["max_bid_velocity"] >= 0
+
+
+def test_velocity_features_single_bid(single_bid_item_data):
+    """Test velocity features for single bid item."""
+    extractor = BidFeatureExtractor()
+    features_df = extractor.extract_features(single_bid_item_data)
+
+    item = features_df.iloc[0]
+
+    # All velocity features should be 0 for single bid
+    assert item["bid_velocity"] == 0.0
+    assert item["bid_amount_velocity"] == 0.0
+    assert item["bid_acceleration"] == 0.0
+    assert item["bid_amount_acceleration"] == 0.0
+    assert item["max_bid_velocity"] == 0.0
+    assert item["final_bid_velocity"] == 0.0
+
+
+def test_config_velocity_features():
+    """Test velocity features configuration."""
+    config = load_feature_config()
+
+    assert config.features.velocity_features.enabled is True
+    assert "bid_velocity" in config.features.velocity_features.features
+    assert "bid_acceleration" in config.features.velocity_features.features

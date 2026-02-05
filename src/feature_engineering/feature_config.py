@@ -144,6 +144,23 @@ class ProxyFeatureConfig:
 
 
 @dataclass
+class VelocityFeatureConfig:
+    """Configuration for velocity and acceleration features."""
+
+    enabled: bool = True
+    features: list[str] = field(
+        default_factory=lambda: [
+            "bid_velocity",
+            "bid_amount_velocity",
+            "bid_acceleration",
+            "bid_amount_acceleration",
+            "max_bid_velocity",
+            "final_bid_velocity",
+        ]
+    )
+
+
+@dataclass
 class MissingValueConfig:
     """Configuration for missing value handling."""
 
@@ -226,6 +243,9 @@ class FeaturesConfig:
         default_factory=DistributionFeatureConfig
     )
     proxy_features: ProxyFeatureConfig = field(default_factory=ProxyFeatureConfig)
+    velocity_features: VelocityFeatureConfig = field(
+        default_factory=VelocityFeatureConfig
+    )
 
 
 @dataclass
@@ -282,6 +302,7 @@ def _parse_features_config(config_dict: dict[str, Any]) -> FeaturesConfig:
     time_dict = config_dict.get("time_features", {})
     dist_dict = config_dict.get("distribution_features", {})
     proxy_dict = config_dict.get("proxy_features", {})
+    velocity_dict = config_dict.get("velocity_features", {})
 
     return FeaturesConfig(
         target=TargetConfig(
@@ -319,6 +340,20 @@ def _parse_features_config(config_dict: dict[str, Any]) -> FeaturesConfig:
         proxy_features=ProxyFeatureConfig(
             enabled=proxy_dict.get("enabled", True),
             features=proxy_dict.get("features", ["proxy_bid_count", "proxy_bid_ratio"]),
+        ),
+        velocity_features=VelocityFeatureConfig(
+            enabled=velocity_dict.get("enabled", True),
+            features=velocity_dict.get(
+                "features",
+                [
+                    "bid_velocity",
+                    "bid_amount_velocity",
+                    "bid_acceleration",
+                    "bid_amount_acceleration",
+                    "max_bid_velocity",
+                    "final_bid_velocity",
+                ],
+            ),
         ),
     )
 
@@ -443,6 +478,8 @@ def get_enabled_feature_groups() -> list[str]:
         enabled.append("distribution_features")
     if features.get("proxy_features", {}).get("enabled", True):
         enabled.append("proxy_features")
+    if features.get("velocity_features", {}).get("enabled", True):
+        enabled.append("velocity_features")
 
     return enabled
 

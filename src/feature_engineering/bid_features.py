@@ -101,6 +101,9 @@ class BidFeatureExtractor:
             if self.feature_config.proxy_features.enabled:
                 item_features.update(self._extract_proxy_features(group))
 
+            if self.feature_config.velocity_features.enabled:
+                item_features.update(self._extract_velocity_features(group))
+
             all_features.append(item_features)
 
         result_df = pd.DataFrame(all_features)
@@ -298,6 +301,130 @@ class BidFeatureExtractor:
 
         return features
 
+    def _extract_velocity_features(self, group: pd.DataFrame) -> dict[str, float]:
+        """Extract velocity and acceleration features."""
+        features = {}
+        velocity_config = self.feature_config.velocity_features
+
+        times = group["bid_time"]
+        amounts = group["bid_amount"]
+
+        if len(times) < 2:
+            # Not enough bids for velocity features
+            for feat in velocity_config.features:
+                features[feat] = 0.0
+            return features
+
+        # Calculate duration in minutes
+        first_time = times.iloc[0]
+        last_time = times.iloc[-1]
+        duration_seconds = (last_time - first_time).total_seconds()
+        duration_minutes = duration_seconds / 60.0
+
+        # Bid velocity: bids per minute
+        if "bid_velocity" in velocity_config.features:
+            features["bid_velocity"] = (
+                len(times) / duration_minutes if duration_minutes > 0 else 0.0
+            )
+
+        # Bid amount velocity: average $ increase per minute
+        if "bid_amount_velocity" in velocity_config.features:
+            total_increase = amounts.iloc[-1] - amounts.iloc[0]
+            features["bid_amount_velocity"] = (
+                total_increase / duration_minutes if duration_minutes > 0 else 0.0
+            )
+
+        # Calculate time differences for acceleration
+        time_diffs = times.diff().dropna()
+        time_diffs_minutes = time_diffs.dt.total_seconds() / 60.0
+
+        # Bid acceleration: rate of change of velocity
+        if "bid_acceleration" in velocity_config.features:
+            if len(time_diffs_minutes) >= 2:
+                # Calculate instantaneous velocities (1/time_gap)
+                # Avoid division by zero
+                velocities = []
+                for td in time_diffs_minutes:
+                    if td > 0:
+                        velocities.append(1.0 / td)
+                    else:
+                        velocities.append(0.0)
+
+                if len(velocities) >= 2:
+                    # Acceleration is change in velocity
+                    velocity_changes = [
+                        velocities[i] - velocities[i - 1]
+                        for i in range(1, len(velocities))
+                    ]
+                    features["bid_acceleration"] = (
+                        sum(velocity_changes) / len(velocity_changes)
+                        if velocity_changes
+                        else 0.0
+                    )
+                else:
+                    features["bid_acceleration"] = 0.0
+            else:
+                features["bid_acceleration"] = 0.0
+
+        # Bid amount acceleration: rate of change of amount velocity
+        if "bid_amount_acceleration" in velocity_config.features:
+            amount_diffs = amounts.diff().dropna()
+            if len(amount_diffs) >= 2 and len(time_diffs_minutes) >= 2:
+                # Calculate instantaneous amount velocities
+                amount_velocities = []
+                for amt_diff, td in zip(amount_diffs, time_diffs_minutes, strict=False):
+                    if td > 0:
+                        amount_velocities.append(amt_diff / td)
+                    else:
+                        amount_velocities.append(0.0)
+
+                if len(amount_velocities) >= 2:
+                    velocity_changes = [
+                        amount_velocities[i] - amount_velocities[i - 1]
+                        for i in range(1, len(amount_velocities))
+                    ]
+                    features["bid_amount_acceleration"] = (
+                        sum(velocity_changes) / len(velocity_changes)
+                        if velocity_changes
+                        else 0.0
+                    )
+                else:
+                    features["bid_amount_acceleration"] = 0.0
+            else:
+                features["bid_amount_acceleration"] = 0.0
+
+        # Maximum bid velocity: max bids per minute in any time window
+        if "max_bid_velocity" in velocity_config.features:
+            if len(time_diffs_minutes) > 0:
+                # Calculate velocity for each gap (1/gap gives bids per minute)
+                instant_velocities = []
+                for td in time_diffs_minutes:
+                    if td > 0:
+                        instant_velocities.append(1.0 / td)
+                features["max_bid_velocity"] = (
+                    max(instant_velocities) if instant_velocities else 0.0
+                )
+            else:
+                features["max_bid_velocity"] = 0.0
+
+        # Final bid velocity: bid velocity in last 25% of auction
+        if "final_bid_velocity" in velocity_config.features:
+            if duration_seconds > 0:
+                threshold_time = first_time + pd.Timedelta(
+                    seconds=duration_seconds * 0.75
+                )
+                final_bids = times[times >= threshold_time]
+                final_duration_minutes = duration_seconds * 0.25 / 60.0
+                features["final_bid_velocity"] = (
+                    len(final_bids) / final_duration_minutes
+                    if final_duration_minutes > 0
+                    else 0.0
+                )
+            else:
+                features["final_bid_velocity"] = 0.0
+
+        return features
+
     def get_feature_names(self) -> list[str]:
         """
         Get list of feature names (excluding identifiers).
@@ -400,6 +527,32 @@ class BidFeatureExtractor:
                     "description": f"Average bid increment in last {n} bids",
                     "type": "distribution",
                 }
+
+        # Add velocity features
+        metadata["bid_velocity"] = {
+            "description": "Bids per minute (overall)",
+            "type": "velocity",
+        }
+        metadata["bid_amount_velocity"] = {
+            "description": "Average dollar increase per minute",
+            "type": "velocity",
+        }
+        metadata["bid_acceleration"] = {
+            "description": "Rate of change of bid velocity (bids/min²)",
+            "type": "velocity",
+        }
+        metadata["bid_amount_acceleration"] = {
+            "description": "Rate of change of amount velocity ($/min²)",
+            "type": "velocity",
+        }
+        metadata["max_bid_velocity"] = {
+            "description": "Maximum instantaneous bid velocity",
+            "type": "velocity",
+        }
+        metadata["final_bid_velocity"] = {
+            "description": "Bid velocity in last 25% of auction duration",
+            "type": "velocity",
+        }
 
         return metadata
 

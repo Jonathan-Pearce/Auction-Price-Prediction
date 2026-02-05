@@ -81,6 +81,17 @@ features:
       - proxy_bid_count      # Number of proxy bids
       - proxy_bid_ratio      # Fraction of bids that are proxy bids
 
+  # Velocity and acceleration features (rate of change)
+  velocity_features:
+    enabled: true
+    features:
+      - bid_velocity              # Bids per minute
+      - bid_amount_velocity       # Average $ increase per minute
+      - bid_acceleration          # Rate of change of velocity (bids/min²)
+      - bid_amount_acceleration   # Rate of change of amount velocity ($/min²)
+      - max_bid_velocity          # Maximum bids per minute in any window
+      - final_bid_velocity        # Bid velocity in last 25% of auction
+
 # =============================================================================
 # Preprocessing Configuration
 # =============================================================================

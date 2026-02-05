@@ -321,7 +321,8 @@ class BidFeatureExtractor:
         duration_seconds = (last_time - first_time).total_seconds()
         duration_minutes = duration_seconds / 60.0
 
-        # Bid velocity: bids per minute
+        # Bid velocity: bids per minute (total bids over total duration)
+        # Note: This measures the overall bidding intensity, not intervals
         if "bid_velocity" in velocity_config.features:
             features["bid_velocity"] = (
                 len(times) / duration_minutes if duration_minutes > 0 else 0.0
@@ -371,8 +372,10 @@ class BidFeatureExtractor:
             amount_diffs = amounts.diff().dropna()
             if len(amount_diffs) >= 2 and len(time_diffs_minutes) >= 2:
                 # Calculate instantaneous amount velocities
+                # Note: amount_diffs and time_diffs_minutes have same length
+                # since both are derived from diff() on the same group
                 amount_velocities = []
-                for amt_diff, td in zip(amount_diffs, time_diffs_minutes, strict=False):
+                for amt_diff, td in zip(amount_diffs, time_diffs_minutes, strict=True):
                     if td > 0:
                         amount_velocities.append(amt_diff / td)
                     else:

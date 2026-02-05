@@ -611,7 +611,7 @@ def add_temporal_activity_features(df: pd.DataFrame) -> pd.DataFrame:
         times_since_start = []
 
         cluster_starts = {}
-        for _i, (cid, bt) in enumerate(zip(cluster_ids, bid_times, strict=False)):
+        for cid, bt in zip(cluster_ids, bid_times, strict=False):
             if cid not in cluster_starts:
                 cluster_starts[cid] = bt
             time_diff = (bt - cluster_starts[cid]) / np.timedelta64(1, "s")

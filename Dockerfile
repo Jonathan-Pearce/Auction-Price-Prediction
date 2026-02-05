@@ -38,8 +38,8 @@ WORKDIR /app
 # Copy project metadata
 COPY pyproject.toml README.md ./
 
-# Install data collection, API, and dev dependencies
-RUN pip install -e ".[data,api,dev]"
+# Install data collection, ML, API, and dev dependencies
+RUN pip install -e ".[data,ml,api,dev]"
 
 # Copy source code
 COPY src/ ./src/

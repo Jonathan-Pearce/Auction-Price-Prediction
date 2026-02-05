@@ -154,6 +154,25 @@ train-fusion:  ## Train fusion meta-model
 	@echo "$(GREEN)Fusion model training complete!$(NC)"
 
 # =============================================================================
+# Feature Engineering
+# =============================================================================
+
+text-embeddings:  ## Generate text embeddings for all items
+	@echo "$(BLUE)Generating text embeddings...$(NC)"
+	$(PYTHON) -m src.text_embeddings --train
+	@echo "$(GREEN)Text embeddings complete!$(NC)"
+
+text-embeddings-sample:  ## Generate text embeddings for sample (1000 items)
+	@echo "$(BLUE)Generating sample text embeddings...$(NC)"
+	$(PYTHON) -m src.text_embeddings --train --limit 1000
+	@echo "$(GREEN)Sample text embeddings complete!$(NC)"
+
+text-embeddings-upload:  ## Generate and upload text embeddings to HF
+	@echo "$(BLUE)Generating and uploading text embeddings...$(NC)"
+	$(PYTHON) -m src.text_embeddings --train --upload
+	@echo "$(GREEN)Text embeddings uploaded!$(NC)"
+
+# =============================================================================
 # API & Deployment
 # =============================================================================
 

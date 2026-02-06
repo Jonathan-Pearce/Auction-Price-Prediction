@@ -115,6 +115,22 @@ See documentation:
 - [ITEM_SCRAPER.md](docs/ITEM_SCRAPER.md) - Item-level data
 - [ENRICHED_ITEM_SCRAPER.md](docs/ENRICHED_ITEM_SCRAPER.md) - Enriched item data
 
+### Feature Engineering
+
+```bash
+# Combine engineered datasets (auction + item + bid features)
+make combine-datasets
+
+# Combine and upload to Hugging Face
+make combine-datasets-upload
+
+# Or run directly with options
+python -m src.combine_engineered_datasets --upload --repo-id myuser/my-dataset
+```
+
+See documentation:
+- [COMBINED_DATASETS.md](docs/COMBINED_DATASETS.md) - Combining engineered datasets
+
 ### Training Models
 
 ```bash

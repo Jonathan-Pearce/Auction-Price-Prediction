@@ -9,6 +9,7 @@ Note: This test requires internet access and may take some time.
 """
 
 import pytest
+from loguru import logger
 
 from src.combine_engineered_datasets import (
     load_auction_features,
@@ -98,9 +99,10 @@ def test_full_pipeline_with_actual_data():
     assert merged_df["auction_id"].notna().sum() > 0
     assert merged_df["item_id"].notna().sum() > 0
 
-    print("\nMerge successful!")
-    print(f"  Auction records: {len(auction_df):,}")
-    print(f"  Item records: {len(item_df):,}")
-    print(f"  Bid records: {len(bid_df):,}")
-    print(f"  Merged records: {len(merged_df):,}")
-    print(f"  Total columns: {len(merged_df.columns)}")
+    # Log merge statistics
+    logger.info("Merge successful!")
+    logger.info(f"  Auction records: {len(auction_df):,}")
+    logger.info(f"  Item records: {len(item_df):,}")
+    logger.info(f"  Bid records: {len(bid_df):,}")
+    logger.info(f"  Merged records: {len(merged_df):,}")
+    logger.info(f"  Total columns: {len(merged_df.columns)}")

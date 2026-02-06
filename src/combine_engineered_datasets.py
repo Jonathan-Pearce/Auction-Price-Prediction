@@ -13,7 +13,7 @@ The datasets are merged on auction_id and item_id, keeping all columns.
 The merged dataset is then uploaded to Hugging Face.
 
 Key features:
-- Batch processing for large bid dataset to manage memory
+- Downloads datasets from Hugging Face
 - Full outer merge to keep all records
 - Ensures auction_id and item_id are first two columns
 - Preserves all columns from all datasets

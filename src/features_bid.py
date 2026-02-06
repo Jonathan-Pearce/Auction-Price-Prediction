@@ -24,6 +24,7 @@ Leakage Prevention:
 """
 
 
+import duckdb
 import numpy as np
 import pandas as pd
 from datasets import Dataset, load_dataset
@@ -683,7 +684,7 @@ def engineer_bid_features(
 
     # Ensure bid_time is datetime
     if not pd.api.types.is_datetime64_any_dtype(result["bid_time"]):
-        result["bid_time"] = pd.to_datetime(result["bid_time"], errors="coerce")
+        result["bid_time"] = pd.to_datetime(result["bid_time"], utc=True, errors="coerce")
 
     # Sort data
     result = result.sort_values(["item_id", "bid_time"]).reset_index(drop=True)
@@ -717,6 +718,8 @@ def run_bid_feature_pipeline(
     upload_to_hf: bool = False,
     hf_repo_id: str = "engineered_bid_data",
     hf_token: str | None = None,
+    batch_size: int | None = None,
+    output_dir: str = "data/interim/feature_batches_bid",
 ) -> pd.DataFrame:
     """
     Run the complete bid feature engineering pipeline with data loading.
@@ -725,6 +728,8 @@ def run_bid_feature_pipeline(
         upload_to_hf: Whether to upload result to Hugging Face
         hf_repo_id: Hugging Face repository ID for upload
         hf_token: Hugging Face token for authentication
+        batch_size: Number of auctions to process per batch (None = process all at once)
+        output_dir: Directory to save batch results
 
     Returns:
         DataFrame with engineered bid features
@@ -732,12 +737,120 @@ def run_bid_feature_pipeline(
     # Load data
     df = load_bid_data()
 
-    # Engineer features
-    result = engineer_bid_features(df)
+    # Process in batches or all at once
+    if batch_size is not None:
+        result = process_in_batches(
+            df, 
+            batch_size=batch_size, 
+            output_dir=output_dir
+        )
+    else:
+        # Engineer features
+        result = engineer_bid_features(df)
 
     # Upload to Hugging Face (optional)
     if upload_to_hf:
         upload_to_huggingface(result, hf_repo_id, hf_token)
+
+    return result
+
+
+def process_in_batches(
+    df: pd.DataFrame,
+    batch_size: int = 1000,
+    output_dir: str = "data/interim/feature_batches_bid",
+) -> pd.DataFrame:
+    """
+    Process bid feature engineering in batches of auctions.
+
+    Args:
+        df: Input dataframe with bid data
+        batch_size: Number of auctions to process per batch
+        output_dir: Directory to save batch results
+
+    Returns:
+        Combined DataFrame with all engineered features
+    """
+    from pathlib import Path
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Get unique auction IDs
+    unique_auctions = df["auction_id"].unique()
+    n_auctions = len(unique_auctions)
+    n_batches = (n_auctions + batch_size - 1) // batch_size
+
+    logger.info(f"Processing {n_auctions} auctions in {n_batches} batches of {batch_size}")
+
+    batch_files = []
+
+    for batch_idx in range(n_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min((batch_idx + 1) * batch_size, n_auctions)
+        batch_auctions = unique_auctions[start_idx:end_idx]
+
+        logger.info(f"\nBatch {batch_idx + 1}/{n_batches}: Processing auctions {start_idx} to {end_idx}")
+
+        # Filter to current batch of auctions
+        batch_df = df[df["auction_id"].isin(batch_auctions)].copy()
+        logger.info(f"  Batch contains {len(batch_df)} bid records")
+
+        # Engineer features for this batch
+        try:
+            batch_result = engineer_bid_features(batch_df)
+
+            # Save batch result
+            batch_file = output_path / f"batch_{batch_idx:04d}.parquet"
+            batch_result.to_parquet(batch_file, index=False)
+            batch_files.append(batch_file)
+            logger.info(f"  Saved batch to {batch_file}")
+
+            # Clear memory
+            del batch_df, batch_result
+
+        except Exception as e:
+            logger.error(f"  Error processing batch {batch_idx}: {e}")
+            raise
+
+    # Combine all batches using DuckDB for memory efficiency
+    logger.info(f"\nCombining {len(batch_files)} batch files using DuckDB...")
+    
+    # Create a temporary DuckDB connection
+    conn = duckdb.connect(database=":memory:")
+    
+    # Create a list of file paths for DuckDB to read
+    file_pattern = str(output_dir / "batch_*.parquet")
+    
+    # Use DuckDB to efficiently combine all parquet files
+    logger.info(f"  Reading from pattern: {file_pattern}")
+    query = f"""
+        SELECT * FROM read_parquet('{file_pattern}')
+    """
+    
+    # Get total row count first
+    count_query = f"SELECT COUNT(*) as total FROM read_parquet('{file_pattern}')"
+    total_rows = conn.execute(count_query).fetchone()[0]
+    logger.info(f"  Total rows across all batches: {total_rows:,}")
+    
+    # Stream the data in chunks to avoid loading everything into memory
+    chunk_size = 1_000_000  # 1M rows per chunk
+    result_chunks = []
+    offset = 0
+    
+    while offset < total_rows:
+        chunk_query = f"{query} LIMIT {chunk_size} OFFSET {offset}"
+        chunk_df = conn.execute(chunk_query).df()
+        result_chunks.append(chunk_df)
+        logger.info(f"  Loaded chunk {offset:,} to {offset + len(chunk_df):,}")
+        offset += chunk_size
+    
+    # Combine all chunks
+    result = pd.concat(result_chunks, ignore_index=True)
+    logger.info(f"Combined result shape: {result.shape}")
+    
+    # Close connection
+    conn.close()
 
     return result
 
@@ -867,6 +980,23 @@ def main() -> None:
         default=None,
         help="Hugging Face API token",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1000,
+        help="Number of auctions to process per batch (default: 1000)",
+    )
+    parser.add_argument(
+        "--no-batch",
+        action="store_true",
+        help="Process all data at once without batching",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="data/interim/feature_batches_bid",
+        help="Directory to save batch results",
+    )
 
     args = parser.parse_args()
 
@@ -875,6 +1005,8 @@ def main() -> None:
         upload_to_hf=args.upload,
         hf_repo_id=args.repo_id,
         hf_token=args.token,
+        batch_size=None if args.no_batch else args.batch_size,
+        output_dir=args.output_dir,
     )
 
     print(f"Pipeline complete. Dataset shape: {df.shape}")

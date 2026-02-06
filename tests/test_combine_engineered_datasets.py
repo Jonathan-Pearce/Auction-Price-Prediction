@@ -255,5 +255,7 @@ def test_merge_no_common_keys_raises_error():
     )
 
     # Should raise ValueError
-    with pytest.raises(ValueError, match="Cannot merge datasets: no common keys"):
+    with pytest.raises(
+        ValueError, match="Cannot merge datasets: no common keys \\(auction_id, item_id\\)"
+    ):
         merge_datasets(auction_df, item_df, bid_df)

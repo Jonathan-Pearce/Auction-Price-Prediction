@@ -61,27 +61,25 @@ def load_item_features() -> pd.DataFrame:
     return df
 
 
-def load_bid_features_batched(batch_size: int = 1_000_000) -> pd.DataFrame:
+def load_bid_features() -> pd.DataFrame:
     """
-    Load engineered bid features from Hugging Face in batches.
+    Load engineered bid features from Hugging Face.
 
-    The bid dataset can be very large, so we use streaming to avoid
-    loading everything into memory at once.
-
-    Args:
-        batch_size: Number of rows to load per batch
+    The bid dataset can be very large. This function loads it directly
+    into memory. For very large datasets that don't fit in memory,
+    consider using the datasets library's streaming mode.
 
     Returns:
         DataFrame with bid-level features
     """
-    logger.info("Loading engineered bid data from HuggingFace in batches...")
+    logger.info("Loading engineered bid data from HuggingFace...")
 
-    # Load dataset in streaming mode
+    # Load dataset
     dataset = load_dataset(
         "jpearce610/engineered_bid_data", split="train", streaming=False
     )
 
-    # Convert to pandas (the dataset is already loaded, streaming=False means regular mode)
+    # Convert to pandas
     df = dataset.to_pandas()
     logger.info(f"Loaded {len(df):,} bid records with {len(df.columns)} columns")
 
@@ -255,7 +253,7 @@ def run_pipeline(
     logger.info("\n[Step 1/4] Loading datasets from Hugging Face...")
     auction_df = load_auction_features()
     item_df = load_item_features()
-    bid_df = load_bid_features_batched()
+    bid_df = load_bid_features()
 
     # Step 2: Merge datasets
     logger.info("\n[Step 2/4] Merging datasets...")

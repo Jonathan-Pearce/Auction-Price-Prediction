@@ -80,7 +80,7 @@ def example_manual():
     """Manually load and merge datasets with custom logic."""
     from src.combine_engineered_datasets import (
         load_auction_features,
-        load_bid_features_batched,
+        load_bid_features,
         load_item_features,
         merge_datasets,
     )
@@ -91,7 +91,7 @@ def example_manual():
     logger.info("Loading datasets...")
     auction_df = load_auction_features()
     item_df = load_item_features()
-    bid_df = load_bid_features_batched()
+    bid_df = load_bid_features()
 
     logger.info(f"Loaded {len(auction_df):,} auctions")
     logger.info(f"Loaded {len(item_df):,} items")

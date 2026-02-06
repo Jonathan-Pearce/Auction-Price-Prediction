@@ -12,7 +12,7 @@ import pytest
 
 from src.combine_engineered_datasets import (
     load_auction_features,
-    load_bid_features_batched,
+    load_bid_features,
     load_item_features,
     merge_datasets,
 )
@@ -52,7 +52,7 @@ def test_load_item_features():
 @pytest.mark.integration
 def test_load_bid_features():
     """Test loading actual bid features from HuggingFace."""
-    df = load_bid_features_batched()
+    df = load_bid_features()
 
     # Check that we got data
     assert len(df) > 0
@@ -71,7 +71,7 @@ def test_full_pipeline_with_actual_data():
     # Load datasets
     auction_df = load_auction_features()
     item_df = load_item_features()
-    bid_df = load_bid_features_batched()
+    bid_df = load_bid_features()
 
     # Check that all datasets have data
     assert len(auction_df) > 0

@@ -172,6 +172,16 @@ text-embeddings-upload:  ## Generate and upload text embeddings to HF
 	$(PYTHON) -m src.text_embeddings --train --upload
 	@echo "$(GREEN)Text embeddings uploaded!$(NC)"
 
+combine-datasets:  ## Combine engineered datasets and save locally
+	@echo "$(BLUE)Combining engineered datasets...$(NC)"
+	$(PYTHON) -m src.combine_engineered_datasets
+	@echo "$(GREEN)Datasets combined!$(NC)"
+
+combine-datasets-upload:  ## Combine and upload engineered datasets to HF
+	@echo "$(BLUE)Combining and uploading engineered datasets...$(NC)"
+	$(PYTHON) -m src.combine_engineered_datasets --upload
+	@echo "$(GREEN)Datasets combined and uploaded!$(NC)"
+
 # =============================================================================
 # API & Deployment
 # =============================================================================

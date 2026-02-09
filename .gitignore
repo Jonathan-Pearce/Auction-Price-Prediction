@@ -183,6 +183,8 @@ images/
 !docs/**/*.jpg
 !reports/figures/*.png
 !reports/figures/*.jpg
+!reports/eda/*.png
+!reports/eda/*.jpg
 
 # -----------------------------------------------------------------------------
 # Hugging Face

@@ -251,6 +251,18 @@ Data is collected from [MaxSold.com](https://maxsold.com) via their public API:
 - **Soft Close**: Bids in the last 2 minutes extend auction by 2 minutes
 - **Zero-Bid Items**: Some items receive no bids (winning price = $0)
 
+## GitHub Copilot Instructions
+
+This repository is configured with specialized instructions for GitHub Copilot to provide domain-specific guidance:
+
+- **General Instructions** (`.github/copilot-instructions.md`) - Project overview, tech stack, and coding standards
+- **Data Engineering** (`.github/instructions/data-engineering.instructions.md`) - Data collection, validation, and storage
+- **ML Training** (`.github/instructions/ml-training.instructions.md`) - Model development, training, and evaluation
+- **Deployment** (`.github/instructions/deployment.instructions.md`) - API development and Hugging Face deployment
+- **Project Management** (`.github/instructions/project-management.instructions.md`) - Documentation, workflows, and configuration
+
+These instructions automatically activate when working on relevant files to provide context-aware assistance.
+
 ## Contributing
 
 1. Fork the repository

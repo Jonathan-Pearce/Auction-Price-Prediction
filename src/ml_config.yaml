@@ -1,0 +1,269 @@
+# =============================================================================
+# Machine Learning Configuration for Auction Price Prediction
+# =============================================================================
+# This YAML file contains shared ML pipeline configuration values used across
+# all model pillars (tabular, image, text, sequential) and the fusion model.
+# =============================================================================
+
+# =============================================================================
+# Target Variable Configuration
+# =============================================================================
+target:
+  # Column name for the price target in the dataset
+  column_name: "item_current_bid"
+  
+  # Target transformation to apply
+  # Options: "log1p", "log", "sqrt", "none"
+  # Using log1p(price) helps with:
+  # - Handling zero prices (log1p(0) = 0)
+  # - Reducing skewness in price distribution
+  # - Keeping gradients reasonable during training
+  transformation: "log1p"
+  
+  # How to handle items with zero bids
+  # Options: "include", "exclude", "separate"
+  handle_zero_bids: "include"
+
+# =============================================================================
+# Data Split Configuration
+# =============================================================================
+data_split:
+  # Train/Validation/Test split ratios (must sum to 1.0)
+  train_ratio: 0.70
+  validation_ratio: 0.15
+  test_ratio: 0.15
+  
+  # Random seed for reproducibility
+  random_state: 42
+  
+  # Whether to stratify splits by price range
+  # Recommended for highly skewed price distributions
+  stratify: false
+  stratify_column: null
+  
+  # Whether to use time-based splits (recommended for production)
+  # If true, older auctions go to train, newer to test
+  time_based_split: false
+  time_column: null
+
+# =============================================================================
+# Evaluation Metrics Configuration
+# =============================================================================
+metrics:
+  # Primary metric for model selection and early stopping
+  # Using MAE because it's interpretable in original price units
+  primary_metric: "mae"
+  
+  # Whether to compute metrics on transformed scale
+  # (e.g., log scale if using log1p transformation)
+  compute_transformed_metrics: true
+  
+  # Whether to compute metrics on original scale
+  # (inverse transform predictions before computing)
+  compute_original_scale_metrics: true
+  
+  # List of metrics to compute
+  regression_metrics:
+    - mae       # Mean Absolute Error - interpretable in dollars
+    - rmse      # Root Mean Square Error - penalizes large errors
+    - mse       # Mean Squared Error - used as loss function
+    - r2        # R-squared - proportion of variance explained
+    - mape      # Mean Absolute Percentage Error (only if no zeros)
+  
+  # Business metrics (optional)
+  business_metrics:
+    # Percentage of predictions within $X of actual
+    within_threshold_amounts: [5, 10, 25, 50, 100]
+
+# =============================================================================
+# General Training Configuration
+# =============================================================================
+training:
+  # Default batch size (can be overridden per model)
+  batch_size: 32
+  
+  # Default learning rate
+  learning_rate: 0.001
+  
+  # Maximum number of epochs
+  max_epochs: 100
+  
+  # Early stopping configuration
+  early_stopping:
+    enabled: true
+    patience: 10
+    min_delta: 0.0001
+    monitor: "val_mae"  # Metric to monitor
+    mode: "min"         # "min" for loss/mae, "max" for r2
+  
+  # Learning rate scheduler
+  lr_scheduler:
+    enabled: true
+    type: "reduce_on_plateau"  # Options: "reduce_on_plateau", "cosine", "step"
+    factor: 0.5
+    patience: 5
+    min_lr: 0.00001
+  
+  # Gradient clipping (helps with exploding gradients)
+  gradient_clip:
+    enabled: true
+    max_norm: 1.0
+  
+  # Random seed for reproducibility
+  random_state: 42
+  
+  # Device configuration (auto, cpu, cuda, mps)
+  # Note: Using CPU only as specified in requirements
+  device: "cpu"
+  
+  # Number of dataloader workers
+  num_workers: 0
+  
+  # Pin memory for faster data transfer (only useful with GPU)
+  pin_memory: false
+
+# =============================================================================
+# Image Embeddings Model Configuration
+# =============================================================================
+image_embeddings_model:
+  # Input dimension (MobileNetV3 outputs 576-dim embeddings)
+  input_dim: 576
+  
+  # Hidden layer configuration
+  # Recommended: 2-3 layers with decreasing size
+  # Smaller = faster training, less memory
+  hidden_layers: [128, 64]  # Reduced from [256, 128] for speed
+  
+  # Output dimension (1 for regression)
+  output_dim: 1
+  
+  # Dropout rate for regularization
+  dropout_rate: 0.2  # Reduced from 0.3 for faster training
+  
+  # Whether to use batch normalization
+  use_batch_norm: true
+  
+  # Activation function: "relu", "leaky_relu", "gelu"
+  activation: "relu"
+  
+  # Model-specific training parameters
+  training:
+    batch_size: 256  # Increased from 64 for faster training
+    learning_rate: 0.002  # Increased proportionally with batch size
+    weight_decay: 0.0001  # L2 regularization
+    
+    # Streaming-specific settings
+    steps_per_epoch: 1000  # Limit steps to avoid extremely long epochs
+    shuffle_buffer_size: 2000  # Reduced from 10000 for lower memory
+    val_batches: 50  # Reduced from 100 for faster validation
+
+# =============================================================================
+# Tabular Model Configuration
+# =============================================================================
+tabular_model:
+  # Model type: "xgboost", "random_forest", "neural_network"
+  model_type: "neural_network"
+  
+  # Neural network architecture (if model_type is "neural_network")
+  hidden_layers: [256, 128, 64]
+  dropout_rate: 0.2
+  use_batch_norm: true
+  
+  # XGBoost/Random Forest parameters (if applicable)
+  n_estimators: 100
+  max_depth: 6
+
+# =============================================================================
+# Text Model Configuration
+# =============================================================================
+text_model:
+  # Pretrained model to use
+  model_name: "distilbert-base-uncased"
+  
+  # Maximum sequence length
+  max_length: 256
+  
+  # Whether to freeze base model weights
+  freeze_base: false
+  
+  # Fine-tuning learning rate (lower than classifier head)
+  base_lr: 0.00002
+  head_lr: 0.001
+
+# =============================================================================
+# Sequential Model Configuration
+# =============================================================================
+sequential_model:
+  # Model type: "lstm", "gru", "transformer"
+  model_type: "lstm"
+  
+  # Hidden size
+  hidden_size: 128
+  
+  # Number of layers
+  num_layers: 2
+  
+  # Bidirectional
+  bidirectional: true
+  
+  # Maximum sequence length
+  max_seq_length: 100
+  
+  # Dropout rate
+  dropout_rate: 0.2
+
+# =============================================================================
+# Fusion Model Configuration
+# =============================================================================
+fusion_model:
+  # Fusion method: "weighted_avg", "linear", "neural", "xgboost"
+  method: "neural"
+  
+  # Which base models to include
+  base_models:
+    - "image_embeddings"
+    - "tabular"
+    - "text"
+    - "sequential"
+  
+  # Neural fusion architecture (if method is "neural")
+  hidden_layers: [64, 32]
+  dropout_rate: 0.2
+
+# =============================================================================
+# Hugging Face Dataset Configuration
+# =============================================================================
+huggingface:
+  # Image embeddings dataset
+  image_embeddings_dataset:
+    repo_id: "jpearce610/image_embeddings"
+    embedding_column: "image_embedding"
+    item_id_column: "item_id"
+  
+  # Item data dataset (contains prices)
+  item_data_dataset:
+    repo_id: "jpearce610/item_data"
+    price_column: "item_current_bid"
+    item_id_column: "item_id"
+
+# =============================================================================
+# Logging and Checkpointing
+# =============================================================================
+logging:
+  # Log training metrics every N batches
+  log_every_n_steps: 100
+  
+  # Whether to log to wandb
+  use_wandb: false
+  wandb_project: "auction-price-prediction"
+
+checkpointing:
+  # Save checkpoint every N epochs
+  save_every_n_epochs: 5
+  
+  # Keep only the best N checkpoints
+  keep_best_n: 3
+  
+  # Metric for determining best checkpoint
+  monitor: "val_mae"
+  mode: "min"

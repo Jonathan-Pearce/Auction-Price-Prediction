@@ -14,6 +14,7 @@ This project scrapes auction data from [MaxSold.com](https://maxsold.com), train
 **Key Features:**
 - 📊 **Multi-modal ML**: Combines tabular, image, text, and sequential models
 - 🔄 **Fusion Model**: Meta-learner that combines predictions from all models
+- 🔍 **RAG Similar Items**: Retrieves comparable past auctions using embedding similarity
 - 🌐 **Web Interface**: Gradio UI for easy predictions via URL input
 - 📈 **~1M Training Items**: Scraped from ~10,000 completed auctions
 
@@ -22,21 +23,21 @@ This project scrapes auction data from [MaxSold.com](https://maxsold.com), train
 ```
 User enters MaxSold URL
         ↓
-┌───────────────────────────────────────┐
-│           FastAPI Backend             │
-├───────────────────────────────────────┤
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ │
-│  │ Tabular │ │  Image  │ │  Text   │ │
-│  │  Model  │ │  Model  │ │  Model  │ │
-│  └────┬────┘ └────┬────┘ └────┬────┘ │
-│       └───────────┼───────────┘      │
-│              ┌────┴────┐             │
-│              │ Fusion  │             │
-│              │  Model  │             │
-│              └────┬────┘             │
-└───────────────────┼───────────────────┘
+┌───────────────────────────────────────────────────┐
+│               FastAPI Backend                     │
+├───────────────────────────────────────────────────┤
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ │
+│  │ Tabular │ │  Image  │ │  Text   │ │   RAG   │ │
+│  │  Model  │ │  Model  │ │  Model  │ │Retriever│ │
+│  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ │
+│       └───────────┼───────────┘      Similar Items│
+│              ┌────┴────┐                          │
+│              │ Fusion  │                          │
+│              │  Model  │                          │
+│              └────┬────┘                          │
+└───────────────────┼────────────────────────────────┘
                     ↓
-         Predicted Price + Confidence
+       Predicted Price + Confidence + Similar Items
 ```
 
 ## Quick Start
@@ -213,6 +214,7 @@ Visit `http://localhost:8000` for the API docs or `http://localhost:7860` for th
 - [System Design](docs/DESIGN.md) - Architecture and data flow
 - [Data Documentation](docs/DATA.md) - Data collection and storage
 - [Model Documentation](docs/MODELS.md) - ML model details
+- [RAG Similar Items](docs/RAG.md) - Embedding-based similar item retrieval
 - [Deployment Guide](docs/DEPLOYMENT.md) - Hugging Face deployment
 - [Development Guide](docs/DEVELOPMENT.md) - Development workflow
 

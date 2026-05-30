@@ -7,6 +7,7 @@ FastAPI application for serving auction price predictions.
 Endpoints:
 - POST /predict: Predict price for an auction item
 - POST /predict/url: Predict price from MaxSold URL
+- POST /similar: Retrieve similar past auction items (RAG)
 - GET /health: Health check
 - GET /models: List available models
 
@@ -19,12 +20,15 @@ Deployment:
 from contextlib import asynccontextmanager
 from typing import Any
 
+import numpy as np
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, HttpUrl
 from loguru import logger
 
-from src.config import settings
+from src.config import PROCESSED_DATA_DIR, settings
+from src.rag import SimilarItemRetriever
+from src.text_embeddings import combine_title_description
 
 
 # =============================================================================
@@ -79,6 +83,54 @@ class ModelsResponse(BaseModel):
 
 
 # =============================================================================
+# Similar Items (RAG) Models
+# =============================================================================
+
+
+class SimilarItemsRequest(BaseModel):
+    """Request body for similar-item retrieval."""
+
+    item_title: str | None = Field(default=None, description="Item title text")
+    item_description: str | None = Field(
+        default=None, description="Item description text"
+    )
+    k: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Number of similar items to return (1-20)",
+    )
+    exclude_item_ids: list[int] = Field(
+        default_factory=list,
+        description="Item IDs to exclude from results (e.g. the query item itself)",
+    )
+
+
+class SimilarItemResult(BaseModel):
+    """A single similar auction item returned by the RAG retriever."""
+
+    item_id: int
+    auction_id: int
+    similarity: float = Field(..., description="Cosine similarity score (0-1)")
+    item_title: str | None = None
+    item_description: str | None = None
+    winning_price: float | None = Field(
+        default=None, description="Historical winning price in USD"
+    )
+
+
+class SimilarItemsResponse(BaseModel):
+    """Response body for similar-item retrieval."""
+
+    similar_items: list[SimilarItemResult]
+    query_title: str | None = None
+    query_description: str | None = None
+    retriever_index_size: int = Field(
+        ..., description="Total number of items in the retrieval index"
+    )
+
+
+# =============================================================================
 # Application Lifespan
 # =============================================================================
 
@@ -89,10 +141,41 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Auction Price Prediction API...")
 
-    # Load models
+    # Load prediction models
     # TODO: Initialize EnsemblePredictor and load models
     # app.state.predictor = EnsemblePredictor()
     logger.info("Models loaded (placeholder)")
+
+    # Load RAG retriever (best-effort: skip if embeddings file is absent)
+    embeddings_path = PROCESSED_DATA_DIR / "text_embeddings.parquet"
+    if embeddings_path.exists():
+        try:
+            app.state.retriever = SimilarItemRetriever.from_parquet(embeddings_path)
+            logger.info(
+                f"RAG retriever loaded: {app.state.retriever.index_size} items indexed"
+            )
+        except Exception as exc:
+            logger.warning(f"RAG retriever failed to load ({exc}); /similar disabled")
+            app.state.retriever = None
+    else:
+        logger.info(
+            "No embeddings file found at "
+            f"{embeddings_path}; /similar endpoint will return empty results"
+        )
+        app.state.retriever = None
+
+    # Load FastText model for query embedding (best-effort)
+    app.state.fasttext_model = None
+    try:
+        from src.text_embeddings import load_model as load_fasttext_model
+
+        app.state.fasttext_model = load_fasttext_model()
+        logger.info("FastText embedding model loaded for RAG query encoding")
+    except Exception as exc:
+        logger.info(
+            f"FastText model not available ({exc}); "
+            "RAG queries will use zero-vector fallback"
+        )
 
     yield
 
@@ -243,6 +326,113 @@ async def predict_from_url(request: PredictFromURLRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Prediction failed: {str(e)}",
+        )
+
+
+@app.post("/similar", response_model=SimilarItemsResponse, tags=["RAG"])
+async def similar_items(request: SimilarItemsRequest):
+    """
+    Retrieve similar past auction items using RAG (embedding-based retrieval).
+
+    Given an item title and/or description, returns the top-k most similar
+    items from historical auctions ranked by cosine similarity of their
+    FastText text embeddings.
+
+    This endpoint is intended to complement price predictions by showing
+    users concrete examples of comparable items that have already sold,
+    along with their historical winning prices.
+
+    The retriever is loaded at startup from the pre-computed embeddings
+    file (``data/processed/text_embeddings.parquet``).  If the file is not
+    present the endpoint returns an empty list without an error.
+
+    Args:
+        request: Contains item_title, item_description, k (1-20),
+            and optional exclude_item_ids.
+
+    Returns:
+        Up to *k* similar items ordered by descending similarity.
+    """
+    retriever = getattr(app.state, "retriever", None)
+
+    if retriever is None:
+        logger.info("RAG retriever not available; returning empty similar items")
+        return SimilarItemsResponse(
+            similar_items=[],
+            query_title=request.item_title,
+            query_description=request.item_description,
+            retriever_index_size=0,
+        )
+
+    if request.item_title is None and request.item_description is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="At least one of item_title or item_description must be provided.",
+        )
+
+    try:
+        from src.text_embeddings import get_document_embedding
+
+        tokens = combine_title_description(request.item_title, request.item_description)
+        if not tokens:
+            return SimilarItemsResponse(
+                similar_items=[],
+                query_title=request.item_title,
+                query_description=request.item_description,
+                retriever_index_size=retriever.index_size,
+            )
+
+        fasttext_model = getattr(app.state, "fasttext_model", None)
+        if fasttext_model is not None:
+            query_embedding = get_document_embedding(tokens, fasttext_model)
+        else:
+            # FastText model not loaded: return empty results rather than
+            # returning meaningless similarity scores from a zero vector.
+            logger.info(
+                "FastText model not loaded; cannot embed query for /similar"
+            )
+            return SimilarItemsResponse(
+                similar_items=[],
+                query_title=request.item_title,
+                query_description=request.item_description,
+                retriever_index_size=retriever.index_size,
+            )
+
+        results = retriever.retrieve(
+            query_embedding=query_embedding,
+            k=request.k,
+            exclude_item_ids=request.exclude_item_ids or [],
+        )
+
+        similar_items_out = [
+            SimilarItemResult(
+                item_id=r.item_id,
+                auction_id=r.auction_id,
+                similarity=r.similarity,
+                item_title=r.item_title,
+                item_description=r.item_description,
+                winning_price=r.winning_price,
+            )
+            for r in results
+        ]
+
+        logger.info(
+            f"Similar items retrieved: {len(similar_items_out)} results "
+            f"for title='{request.item_title}'"
+        )
+
+        return SimilarItemsResponse(
+            similar_items=similar_items_out,
+            query_title=request.item_title,
+            query_description=request.item_description,
+            retriever_index_size=retriever.index_size,
+        )
+
+    except Exception as e:
+        logger.error(f"Similar items retrieval failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Similar items retrieval failed: {str(e)}",
         )
 
 
